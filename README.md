@@ -4,6 +4,8 @@ RouteRoulette is an app for creating running routes of a chosen distance while p
 
 The goal is simple: pick a target length, start from where you are, and let the app suggest a route that helps you explore more of your local map instead of repeating the same roads.
 
+Over time, RouteRoulette can use your running history to make each new route feel fresh while still matching the distance you want to run.
+
 ## What It Does
 
 - Builds routes around a target distance
