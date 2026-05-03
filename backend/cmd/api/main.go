@@ -16,7 +16,7 @@ func main() {
 
 	orsClient := ors.NewClient(cfg.ORSBaseURL, cfg.ORSAPIKey, 20*time.Second)
 	routePlanner := planner.New(orsClient, cfg.AllowMockRoutes)
-	server := api.NewServer(cfg, routePlanner)
+	server := api.NewServer(cfg, routePlanner, orsClient)
 
 	log.Printf("RouteRoulette API listening on :%s", cfg.Port)
 	if cfg.ORSAPIKey == "" {

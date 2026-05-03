@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +28,78 @@ func NewClient(baseURL string, apiKey string, timeout time.Duration) Client {
 			Timeout: timeout,
 		},
 	}
+}
+
+func (c Client) SearchAddress(ctxReq *http.Request, text string) (planner.GeocodeResponse, error) {
+	trimmed := strings.TrimSpace(text)
+	if coordinate, ok := parseCoordinateText(trimmed); ok {
+		return planner.GeocodeResponse{
+			Label: trimmed,
+			Home:  coordinate,
+		}, nil
+	}
+
+	if c.apiKey == "" {
+		return planner.GeocodeResponse{}, fmt.Errorf("ORS_API_KEY is required to search addresses")
+	}
+
+	endpoint, err := url.Parse(c.baseURL + "/geocode/search")
+	if err != nil {
+		return planner.GeocodeResponse{}, err
+	}
+
+	query := endpoint.Query()
+	query.Set("api_key", c.apiKey)
+	query.Set("text", trimmed)
+	query.Set("size", "1")
+	endpoint.RawQuery = query.Encode()
+
+	httpReq, err := http.NewRequestWithContext(ctxReq.Context(), http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return planner.GeocodeResponse{}, err
+	}
+	httpReq.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return planner.GeocodeResponse{}, err
+	}
+	defer resp.Body.Close()
+
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	if err != nil {
+		return planner.GeocodeResponse{}, err
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return planner.GeocodeResponse{}, fmt.Errorf("openrouteservice geocoding returned %s: %s", resp.Status, string(responseBody))
+	}
+
+	var parsed orsGeocodeResponse
+	if err := json.Unmarshal(responseBody, &parsed); err != nil {
+		return planner.GeocodeResponse{}, err
+	}
+	if len(parsed.Features) == 0 {
+		return planner.GeocodeResponse{}, fmt.Errorf("no location found for that address")
+	}
+
+	feature := parsed.Features[0]
+	if len(feature.Geometry.Coordinates) < 2 {
+		return planner.GeocodeResponse{}, fmt.Errorf("geocoding result did not include coordinates")
+	}
+
+	label := feature.Properties.Label
+	if label == "" {
+		label = trimmed
+	}
+
+	return planner.GeocodeResponse{
+		Label: label,
+		Home: planner.Coordinate{
+			Lat: feature.Geometry.Coordinates[1],
+			Lon: feature.Geometry.Coordinates[0],
+		},
+	}, nil
 }
 
 func (c Client) GenerateRoundTrip(ctxReq *http.Request, req planner.CandidateRequest) (planner.CandidateRoute, error) {
@@ -146,6 +220,40 @@ type orsGeoJSONResponse struct {
 			Extras map[string]json.RawMessage `json:"extras"`
 		} `json:"properties"`
 	} `json:"features"`
+}
+
+type orsGeocodeResponse struct {
+	Features []struct {
+		Geometry struct {
+			Coordinates []float64 `json:"coordinates"`
+		} `json:"geometry"`
+		Properties struct {
+			Label string `json:"label"`
+		} `json:"properties"`
+	} `json:"features"`
+}
+
+func parseCoordinateText(text string) (planner.Coordinate, bool) {
+	parts := strings.FieldsFunc(text, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' '
+	})
+	values := make([]string, 0, 2)
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			values = append(values, trimmed)
+		}
+	}
+	if len(values) != 2 {
+		return planner.Coordinate{}, false
+	}
+
+	lat, latErr := strconv.ParseFloat(values[0], 64)
+	lon, lonErr := strconv.ParseFloat(values[1], 64)
+	if latErr != nil || lonErr != nil || lat < -90 || lat > 90 || lon < -180 || lon > 180 {
+		return planner.Coordinate{}, false
+	}
+
+	return planner.Coordinate{Lat: lat, Lon: lon}, true
 }
 
 func pavedPercentFromExtras(extras map[string]json.RawMessage) *float64 {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/EDessin/RouteRoulette/backend/internal/config"
@@ -14,21 +15,28 @@ type RoutePlanner interface {
 	Generate(r *http.Request, req planner.GenerateRouteRequest) (planner.RouteResponse, error)
 }
 
-type Server struct {
-	cfg     config.Config
-	planner RoutePlanner
+type Geocoder interface {
+	SearchAddress(r *http.Request, text string) (planner.GeocodeResponse, error)
 }
 
-func NewServer(cfg config.Config, routePlanner RoutePlanner) Server {
+type Server struct {
+	cfg      config.Config
+	planner  RoutePlanner
+	geocoder Geocoder
+}
+
+func NewServer(cfg config.Config, routePlanner RoutePlanner, geocoder Geocoder) Server {
 	return Server{
-		cfg:     cfg,
-		planner: routePlanner,
+		cfg:      cfg,
+		planner:  routePlanner,
+		geocoder: geocoder,
 	}
 }
 
 func (s Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.handleHealth)
+	mux.HandleFunc("POST /api/geocode", s.handleGeocode)
 	mux.HandleFunc("POST /api/routes/generate", s.handleGenerateRoute)
 
 	return s.withCORS(mux)
@@ -39,6 +47,30 @@ func (s Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"status": "ok",
 		"time":   time.Now().UTC().Format(time.RFC3339),
 	})
+}
+
+func (s Server) handleGeocode(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	var req planner.GeocodeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "The geocode request body is not valid JSON.")
+		return
+	}
+
+	text := strings.TrimSpace(req.Text)
+	if text == "" {
+		writeError(w, http.StatusBadRequest, "Enter a home address.")
+		return
+	}
+
+	result, err := s.geocoder.SearchAddress(r, text)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s Server) handleGenerateRoute(w http.ResponseWriter, r *http.Request) {

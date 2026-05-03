@@ -12,6 +12,15 @@ type Coordinate struct {
 	Lon float64 `json:"lon"`
 }
 
+type GeocodeRequest struct {
+	Text string `json:"text"`
+}
+
+type GeocodeResponse struct {
+	Label string     `json:"label"`
+	Home  Coordinate `json:"home"`
+}
+
 type GenerateRouteRequest struct {
 	Home                  Coordinate `json:"home"`
 	TargetDistanceKm      float64    `json:"targetDistanceKm"`

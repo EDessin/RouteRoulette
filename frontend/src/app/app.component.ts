@@ -6,6 +6,7 @@ import * as L from 'leaflet';
 import { ButtonModule } from 'primeng/button';
 import { CheckboxModule } from 'primeng/checkbox';
 import { InputNumberModule } from 'primeng/inputnumber';
+import { InputTextModule } from 'primeng/inputtext';
 import { MessageModule } from 'primeng/message';
 import { ProgressSpinnerModule } from 'primeng/progressspinner';
 import { SliderModule } from 'primeng/slider';
@@ -21,6 +22,7 @@ import { Coordinate, RouteApiService, RouteResponse } from './route-api.service'
     CommonModule,
     FormsModule,
     InputNumberModule,
+    InputTextModule,
     MessageModule,
     ProgressSpinnerModule,
     SliderModule,
@@ -32,8 +34,8 @@ import { Coordinate, RouteApiService, RouteResponse } from './route-api.service'
 export class AppComponent implements AfterViewInit, OnDestroy {
   @ViewChild('map', { static: true }) private readonly mapElement!: ElementRef<HTMLDivElement>;
 
-  homeLat = 50.9950381;
-  homeLon = 4.7699273;
+  homeAddress = '50.9950381, 4.7699273';
+  resolvedHomeLabel = this.homeAddress;
   targetDistanceKm = 8;
   maxStartDistanceKm = 2;
   estimatedPaceMinPerKm = 6;
@@ -44,6 +46,8 @@ export class AppComponent implements AfterViewInit, OnDestroy {
   errorMessage = '';
   isGenerating = false;
 
+  private homeLat = 50.9950381;
+  private homeLon = 4.7699273;
   private map?: L.Map;
   private routeLayer?: L.Polyline;
   private homeMarker?: L.CircleMarker;
@@ -72,13 +76,45 @@ export class AppComponent implements AfterViewInit, OnDestroy {
 
   generateRoute(): void {
     if (!this.isValidForm()) {
-      this.errorMessage = 'Check the route length, start radius, pace, paved percentage, and home coordinates.';
+      this.errorMessage = 'Check the home address, route length, start radius, pace, and paved percentage.';
       return;
     }
 
     this.errorMessage = '';
     this.isGenerating = true;
 
+    this.routeApi
+      .geocodeAddress({ text: this.homeAddress.trim() })
+      .subscribe({
+        next: (location) => {
+          this.homeLat = location.home.lat;
+          this.homeLon = location.home.lon;
+          this.resolvedHomeLabel = location.label;
+          this.drawHomeMarker();
+          this.generateRouteFromResolvedHome();
+        },
+        error: (err: HttpErrorResponse) => {
+          this.isGenerating = false;
+          this.errorMessage = this.errorText(err);
+        },
+      });
+  }
+
+  private isValidForm(): boolean {
+    return (
+      this.homeAddress.trim().length >= 3 &&
+      this.targetDistanceKm >= 1 &&
+      this.targetDistanceKm <= 100 &&
+      this.maxStartDistanceKm >= 0 &&
+      this.maxStartDistanceKm <= 25 &&
+      this.estimatedPaceMinPerKm >= 2 &&
+      this.estimatedPaceMinPerKm <= 20 &&
+      this.minPavedPercent >= 0 &&
+      this.minPavedPercent <= 100
+    );
+  }
+
+  private generateRouteFromResolvedHome(): void {
     this.routeApi
       .generateRoute({
         home: this.homeCoordinate(),
@@ -100,36 +136,6 @@ export class AppComponent implements AfterViewInit, OnDestroy {
           this.errorMessage = this.errorText(err);
         },
       });
-  }
-
-  useCurrentMapCenter(): void {
-    const center = this.map?.getCenter();
-    if (!center) {
-      return;
-    }
-
-    this.homeLat = Number(center.lat.toFixed(6));
-    this.homeLon = Number(center.lng.toFixed(6));
-    this.drawHomeMarker();
-  }
-
-  private isValidForm(): boolean {
-    return (
-      Number.isFinite(this.homeLat) &&
-      Number.isFinite(this.homeLon) &&
-      this.homeLat >= -90 &&
-      this.homeLat <= 90 &&
-      this.homeLon >= -180 &&
-      this.homeLon <= 180 &&
-      this.targetDistanceKm >= 1 &&
-      this.targetDistanceKm <= 100 &&
-      this.maxStartDistanceKm >= 0 &&
-      this.maxStartDistanceKm <= 25 &&
-      this.estimatedPaceMinPerKm >= 2 &&
-      this.estimatedPaceMinPerKm <= 20 &&
-      this.minPavedPercent >= 0 &&
-      this.minPavedPercent <= 100
-    );
   }
 
   private homeCoordinate(): Coordinate {

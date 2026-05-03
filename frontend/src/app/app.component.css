@@ -62,7 +62,8 @@ p {
 
 .field p-inputnumber,
 .field ::ng-deep .p-inputnumber,
-.field ::ng-deep .p-inputtext {
+.field ::ng-deep .p-inputtext,
+.field .p-inputtext {
   width: 100%;
 }
 
@@ -74,10 +75,13 @@ p {
   margin-top: 0.25rem;
 }
 
-.coordinate-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.75rem;
+.summary-wide {
+  grid-column: 1 / -1;
+}
+
+.summary-wide strong {
+  font-size: 0.95rem;
+  overflow-wrap: anywhere;
 }
 
 .check-row {

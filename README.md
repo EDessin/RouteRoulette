@@ -12,7 +12,7 @@ This repository now contains an MVP with:
 
 - A Go REST API in `backend/`
 - An Angular + PrimeNG frontend in `frontend/`
-- A route generation form for target distance, home coordinates, max start radius, and paved preference
+- A route generation form for home address, target distance, max start radius, and paved preference
 - Estimated run duration based on your pace in minutes per kilometer
 - Minimum paved percentage targeting for route candidate scoring
 - A map view that displays the generated circular route
@@ -61,6 +61,20 @@ The Angular app runs on `http://localhost:4200` and proxies `/api` requests to t
 
 ## API
 
+Geocode a home address:
+
+```http
+POST /api/geocode
+```
+
+Example body:
+
+```json
+{
+  "text": "50.9950381, 4.7699273"
+}
+```
+
 Generate a route:
 
 ```http
@@ -90,6 +104,8 @@ OpenRouteService round-trip routing treats the requested length as a target, not
 Paved-route preference depends on available OpenStreetMap surface data. When the provider does not return enough surface detail, the API returns a warning instead of pretending to know.
 
 Minimum paved percentage is used as a route scoring target. The backend retries candidates and returns the best match it can find; provider and map data limitations mean this is not always a hard guarantee.
+
+Address search uses OpenRouteService geocoding and requires `ORS_API_KEY`. Coordinate text such as `50.9950381, 4.7699273` works without a key for local mock-route testing.
 
 ## Project Status
 
