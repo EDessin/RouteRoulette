@@ -103,7 +103,7 @@ OpenRouteService round-trip routing treats the requested length as a target, not
 
 Paved-route preference depends on available OpenStreetMap surface data. When the provider does not return enough surface detail, the API returns a warning instead of pretending to know.
 
-Minimum paved percentage is the main route scoring target. The backend retries candidates at the requested distance and at progressively longer distances, rejects shorter routes when possible, and returns the best paved match it can find. Provider and map data limitations mean this is not always a hard guarantee.
+Minimum paved percentage is the main route scoring target. The backend retries many candidates at the requested distance and at progressively longer distances, rejects shorter routes when possible, and aims to find a paved-road result within 5 percentage points of the requested value. Provider and map data limitations mean this is not always a hard guarantee.
 
 Address search uses OpenRouteService geocoding and requires `ORS_API_KEY`. Coordinate text such as `50.9950381, 4.7699273` works without a key for local mock-route testing.
 

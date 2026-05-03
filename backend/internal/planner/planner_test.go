@@ -21,6 +21,47 @@ func TestRouteScorePrioritizesPavedThresholdOverExtraDistance(t *testing.T) {
 	}
 }
 
+func TestRouteScorePrefersCloserPavedMatch(t *testing.T) {
+	targetM := 10000.0
+	closeMatch := 74.0
+	overPaved := 100.0
+
+	routeNearRequestedPavedTarget := CandidateRoute{
+		DistanceM:    11000,
+		PavedPercent: &closeMatch,
+	}
+	routeFarAboveRequestedPavedTarget := CandidateRoute{
+		DistanceM:    10500,
+		PavedPercent: &overPaved,
+	}
+
+	if routeScore(routeNearRequestedPavedTarget, targetM, 70) >= routeScore(routeFarAboveRequestedPavedTarget, targetM, 70) {
+		t.Fatal("expected route scoring to prefer the route closer to the requested paved percentage")
+	}
+}
+
+func TestGoodEnoughRequiresPavedMatchWithinFivePercentagePoints(t *testing.T) {
+	targetM := 10000.0
+	closeMatch := 74.0
+	farMatch := 80.5
+
+	closeRoute := CandidateRoute{
+		DistanceM:    10500,
+		PavedPercent: &closeMatch,
+	}
+	farRoute := CandidateRoute{
+		DistanceM:    10500,
+		PavedPercent: &farMatch,
+	}
+
+	if !isGoodEnough(closeRoute, targetM, 70) {
+		t.Fatal("expected route within five paved percentage points to be good enough")
+	}
+	if isGoodEnough(farRoute, targetM, 70) {
+		t.Fatal("expected route outside five paved percentage points not to be good enough")
+	}
+}
+
 func TestRouteScorePenalizesShortRoutes(t *testing.T) {
 	targetM := 10000.0
 	paved := 95.0
