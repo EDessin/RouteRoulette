@@ -38,3 +38,20 @@ func TestClassifySurface(t *testing.T) {
 		})
 	}
 }
+
+func TestLocalScorePenalizesRoutesMoreThanHalfKilometerLong(t *testing.T) {
+	targetM := 10000.0
+
+	withinLimit := localCandidate{
+		DistanceM:    10500,
+		PavedPercent: 70,
+	}
+	overLimit := localCandidate{
+		DistanceM:    10600,
+		PavedPercent: 70,
+	}
+
+	if localScore(withinLimit, targetM, 70) >= localScore(overLimit, targetM, 70) {
+		t.Fatal("expected local scoring to penalize routes more than 0.5 km longer than requested")
+	}
+}

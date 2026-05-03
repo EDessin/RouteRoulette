@@ -8,7 +8,7 @@ func TestRouteScorePrioritizesPavedThresholdOverExtraDistance(t *testing.T) {
 	unpaved := 70.0
 
 	longerPavedRoute := CandidateRoute{
-		DistanceM:    12000,
+		DistanceM:    10500,
 		PavedPercent: &paved,
 	}
 	shorterUnpavedRoute := CandidateRoute{
@@ -27,7 +27,7 @@ func TestRouteScorePrefersCloserPavedMatch(t *testing.T) {
 	overPaved := 100.0
 
 	routeNearRequestedPavedTarget := CandidateRoute{
-		DistanceM:    11000,
+		DistanceM:    10500,
 		PavedPercent: &closeMatch,
 	}
 	routeFarAboveRequestedPavedTarget := CandidateRoute{
@@ -62,6 +62,24 @@ func TestGoodEnoughRequiresPavedMatchWithinFivePercentagePoints(t *testing.T) {
 	}
 }
 
+func TestRouteScorePenalizesRoutesMoreThanHalfKilometerLong(t *testing.T) {
+	targetM := 10000.0
+	paved := 70.0
+
+	withinLimit := CandidateRoute{
+		DistanceM:    10500,
+		PavedPercent: &paved,
+	}
+	overLimit := CandidateRoute{
+		DistanceM:    10600,
+		PavedPercent: &paved,
+	}
+
+	if routeScore(withinLimit, targetM, 70) >= routeScore(overLimit, targetM, 70) {
+		t.Fatal("expected route scoring to penalize routes more than 0.5 km longer than requested")
+	}
+}
+
 func TestRouteScorePenalizesShortRoutes(t *testing.T) {
 	targetM := 10000.0
 	paved := 95.0
@@ -71,7 +89,7 @@ func TestRouteScorePenalizesShortRoutes(t *testing.T) {
 		PavedPercent: &paved,
 	}
 	longRoute := CandidateRoute{
-		DistanceM:    11000,
+		DistanceM:    10500,
 		PavedPercent: &paved,
 	}
 

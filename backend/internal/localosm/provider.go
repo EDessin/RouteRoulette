@@ -381,7 +381,7 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest) (planner.CandidateRou
 			best = candidate
 			bestScore = score
 		}
-		if candidate.DistanceM >= req.TargetDistanceM && math.Abs(candidate.PavedPercent-req.MinPavedPercent) <= 5 {
+		if candidate.DistanceM >= req.TargetDistanceM && candidate.DistanceM <= req.TargetDistanceM+500 && math.Abs(candidate.PavedPercent-req.MinPavedPercent) <= 5 {
 			break
 		}
 	}
@@ -553,7 +553,11 @@ func surfaceWeight(surface int, minPavedPercent float64) float64 {
 
 func localScore(candidate localCandidate, targetM float64, minPavedPercent float64) float64 {
 	shortPenalty := math.Max(0, targetM-candidate.DistanceM) / targetM * 1000
-	extraPenalty := math.Max(0, candidate.DistanceM-targetM) / targetM
+	extraMeters := math.Max(0, candidate.DistanceM-targetM)
+	extraPenalty := extraMeters / targetM
+	if extraMeters > 500 {
+		extraPenalty += (extraMeters - 500) / 10
+	}
 	pavedPenalty := math.Abs(candidate.PavedPercent-minPavedPercent) * 10
 	if candidate.PavedPercent < minPavedPercent {
 		pavedPenalty *= 4
