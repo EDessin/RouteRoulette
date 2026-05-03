@@ -70,6 +70,10 @@ p {
   padding: 0 0.2rem;
 }
 
+.slider-field + .field {
+  margin-top: 0.25rem;
+}
+
 .coordinate-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

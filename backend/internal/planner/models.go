@@ -13,11 +13,13 @@ type Coordinate struct {
 }
 
 type GenerateRouteRequest struct {
-	Home               Coordinate `json:"home"`
-	TargetDistanceKm   float64    `json:"targetDistanceKm"`
-	MaxStartDistanceKm float64    `json:"maxStartDistanceKm"`
-	PreferPaved        bool       `json:"preferPaved"`
-	Seed               *int64     `json:"seed,omitempty"`
+	Home                  Coordinate `json:"home"`
+	TargetDistanceKm      float64    `json:"targetDistanceKm"`
+	MaxStartDistanceKm    float64    `json:"maxStartDistanceKm"`
+	EstimatedPaceMinPerKm *float64   `json:"estimatedPaceMinPerKm,omitempty"`
+	PreferPaved           bool       `json:"preferPaved"`
+	MinPavedPercent       float64    `json:"minPavedPercent"`
+	Seed                  *int64     `json:"seed,omitempty"`
 }
 
 type RouteResponse struct {
@@ -40,6 +42,7 @@ type CandidateRequest struct {
 	Start           Coordinate
 	TargetDistanceM float64
 	PreferPaved     bool
+	MinPavedPercent float64
 	Seed            int64
 }
 

@@ -45,6 +45,22 @@
         <p-slider [(ngModel)]="maxStartDistanceKm" name="maxStartDistanceKmSlider" [min]="0" [max]="25" [step]="0.5" />
       </div>
 
+      <label class="field">
+        <span>Estimated pace</span>
+        <p-inputnumber
+          [(ngModel)]="estimatedPaceMinPerKm"
+          name="estimatedPaceMinPerKm"
+          [min]="2"
+          [max]="20"
+          [step]="0.1"
+          suffix=" min/km"
+          inputId="estimatedPaceMinPerKm"
+          mode="decimal"
+          [minFractionDigits]="1"
+          [maxFractionDigits]="1"
+        />
+      </label>
+
       <div class="coordinate-grid">
         <label class="field">
           <span>Home latitude</span>
@@ -81,6 +97,26 @@
         <p-checkbox [(ngModel)]="preferPaved" name="preferPaved" [binary]="true" inputId="preferPaved" />
         <span>Prefer paved routes</span>
       </label>
+
+      <label class="field">
+        <span>Minimum paved</span>
+        <p-inputnumber
+          [(ngModel)]="minPavedPercent"
+          name="minPavedPercent"
+          [min]="0"
+          [max]="100"
+          [step]="5"
+          suffix="%"
+          inputId="minPavedPercent"
+          mode="decimal"
+          [minFractionDigits]="0"
+          [maxFractionDigits]="0"
+        />
+      </label>
+
+      <div class="slider-field">
+        <p-slider [(ngModel)]="minPavedPercent" name="minPavedPercentSlider" [min]="0" [max]="100" [step]="5" />
+      </div>
 
       <button pButton type="submit" icon="pi pi-directions" label="Generate route" [loading]="isGenerating"></button>
     </form>

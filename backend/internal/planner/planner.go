@@ -37,14 +37,14 @@ func (p Planner) Generate(r *http.Request, req GenerateRouteRequest) (RouteRespo
 	if err != nil {
 		if p.allowMockRoutes {
 			mock := buildMockRoute(req, targetM, seed)
-			return routeResponse(mock, req.TargetDistanceKm, []string{
+			return routeResponse(mock, req, []string{
 				"Using a mock route because the routing provider is not configured or unavailable.",
 			}), nil
 		}
 		return RouteResponse{}, fmt.Errorf("%w: %v", ErrRouteUnavailable, err)
 	}
 
-	return routeResponse(best, req.TargetDistanceKm, nil), nil
+	return routeResponse(best, req, nil), nil
 }
 
 func (p Planner) bestCandidate(r *http.Request, req GenerateRouteRequest, targetM float64, seed int64) (CandidateRoute, error) {
@@ -65,6 +65,7 @@ func (p Planner) bestCandidate(r *http.Request, req GenerateRouteRequest, target
 			Start:           start,
 			TargetDistanceM: targetM,
 			PreferPaved:     req.PreferPaved,
+			MinPavedPercent: req.MinPavedPercent,
 			Seed:            candidateSeed,
 		})
 		if err != nil {
@@ -72,13 +73,13 @@ func (p Planner) bestCandidate(r *http.Request, req GenerateRouteRequest, target
 			continue
 		}
 
-		score := routeScore(route, targetM, req.PreferPaved)
+		score := routeScore(route, targetM, req.PreferPaved, req.MinPavedPercent)
 		if score < bestScore {
 			best = route
 			bestScore = score
 		}
 
-		if score <= 0.05 {
+		if score <= 0.05 && satisfiesPavedThreshold(route, req.MinPavedPercent) {
 			return route, nil
 		}
 	}
@@ -90,28 +91,45 @@ func (p Planner) bestCandidate(r *http.Request, req GenerateRouteRequest, target
 	return CandidateRoute{}, lastErr
 }
 
-func routeScore(route CandidateRoute, targetM float64, preferPaved bool) float64 {
+func routeScore(route CandidateRoute, targetM float64, preferPaved bool, minPavedPercent float64) float64 {
 	distanceError := math.Abs(route.DistanceM-targetM) / targetM
-	if preferPaved && route.PavedPercent != nil {
-		return distanceError + ((100 - *route.PavedPercent) / 100)
+	if (preferPaved || minPavedPercent > 0) && route.PavedPercent != nil {
+		shortfall := math.Max(0, minPavedPercent-*route.PavedPercent) / 100
+		unpavedPenalty := (100 - *route.PavedPercent) / 100
+		return distanceError + shortfall*2 + unpavedPenalty*0.25
 	}
 	return distanceError
 }
 
-func routeResponse(route CandidateRoute, targetDistanceKm float64, warnings []string) RouteResponse {
+func satisfiesPavedThreshold(route CandidateRoute, minPavedPercent float64) bool {
+	return minPavedPercent <= 0 || route.PavedPercent == nil || *route.PavedPercent >= minPavedPercent
+}
+
+func routeResponse(route CandidateRoute, req GenerateRouteRequest, warnings []string) RouteResponse {
 	allWarnings := append([]string{}, route.Warnings...)
 	allWarnings = append(allWarnings, warnings...)
 
 	actualKm := route.DistanceM / 1000
-	if math.Abs(actualKm-targetDistanceKm)/targetDistanceKm > 0.10 {
+	if math.Abs(actualKm-req.TargetDistanceKm)/req.TargetDistanceKm > 0.10 {
 		allWarnings = append(allWarnings, "The generated route is more than 10% away from the requested distance.")
+	}
+	if req.MinPavedPercent > 0 && route.PavedPercent == nil {
+		allWarnings = append(allWarnings, "Surface data was not available, so the minimum paved percentage could not be verified.")
+	}
+	if req.MinPavedPercent > 0 && route.PavedPercent != nil && *route.PavedPercent < req.MinPavedPercent {
+		allWarnings = append(allWarnings, fmt.Sprintf("The best route found is %.0f%% paved, below your %.0f%% minimum.", *route.PavedPercent, req.MinPavedPercent))
+	}
+
+	durationMinutes := route.DurationSeconds / 60
+	if req.EstimatedPaceMinPerKm != nil {
+		durationMinutes = actualKm * *req.EstimatedPaceMinPerKm
 	}
 
 	return RouteResponse{
 		RouteID:         fmt.Sprintf("%d", time.Now().UnixNano()),
 		Start:           route.Start,
 		DistanceKm:      round(actualKm, 2),
-		DurationMinutes: round(route.DurationSeconds/60, 1),
+		DurationMinutes: round(durationMinutes, 1),
 		Geometry:        route.Geometry,
 		PavedPercent:    route.PavedPercent,
 		Provider:        route.Provider,
@@ -128,6 +146,12 @@ func validate(req GenerateRouteRequest) error {
 	}
 	if req.MaxStartDistanceKm < 0 || req.MaxStartDistanceKm > 25 {
 		return fmt.Errorf("%w: maxStartDistanceKm must be between 0 and 25", ErrInvalidRequest)
+	}
+	if req.EstimatedPaceMinPerKm != nil && (*req.EstimatedPaceMinPerKm < 2 || *req.EstimatedPaceMinPerKm > 20) {
+		return fmt.Errorf("%w: estimatedPaceMinPerKm must be between 2 and 20", ErrInvalidRequest)
+	}
+	if req.MinPavedPercent < 0 || req.MinPavedPercent > 100 {
+		return fmt.Errorf("%w: minPavedPercent must be between 0 and 100", ErrInvalidRequest)
 	}
 	return nil
 }
@@ -188,11 +212,20 @@ func buildMockRoute(req GenerateRouteRequest, targetM float64, seed int64) Candi
 			Type:        "LineString",
 			Coordinates: coordinates,
 		},
-		Provider: "mock",
+		PavedPercent: mockPavedPercent(req),
+		Provider:     "mock",
 		Warnings: []string{
 			"Mock geometry is for local UI testing only; set ORS_API_KEY for real paved-road routing.",
 		},
 	}
+}
+
+func mockPavedPercent(req GenerateRouteRequest) *float64 {
+	value := math.Max(req.MinPavedPercent, 80)
+	if value > 100 {
+		value = 100
+	}
+	return &value
 }
 
 func round(value float64, places int) float64 {

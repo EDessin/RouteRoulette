@@ -94,7 +94,7 @@ func (c Client) GenerateRoundTrip(ctxReq *http.Request, req planner.CandidateReq
 
 	pavedPercent := pavedPercentFromExtras(feature.Properties.Extras)
 	warnings := []string{}
-	if req.PreferPaved && pavedPercent == nil {
+	if (req.PreferPaved || req.MinPavedPercent > 0) && pavedPercent == nil {
 		warnings = append(warnings, "Surface data was not available for paved-route scoring.")
 	}
 

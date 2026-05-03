@@ -36,7 +36,9 @@ export class AppComponent implements AfterViewInit, OnDestroy {
   homeLon = 4.3517;
   targetDistanceKm = 8;
   maxStartDistanceKm = 2;
+  estimatedPaceMinPerKm = 6;
   preferPaved = true;
+  minPavedPercent = 70;
 
   route?: RouteResponse;
   errorMessage = '';
@@ -70,7 +72,7 @@ export class AppComponent implements AfterViewInit, OnDestroy {
 
   generateRoute(): void {
     if (!this.isValidForm()) {
-      this.errorMessage = 'Check the route length, start radius, and home coordinates.';
+      this.errorMessage = 'Check the route length, start radius, pace, paved percentage, and home coordinates.';
       return;
     }
 
@@ -82,7 +84,9 @@ export class AppComponent implements AfterViewInit, OnDestroy {
         home: this.homeCoordinate(),
         targetDistanceKm: this.targetDistanceKm,
         maxStartDistanceKm: this.maxStartDistanceKm,
+        estimatedPaceMinPerKm: this.estimatedPaceMinPerKm,
         preferPaved: this.preferPaved,
+        minPavedPercent: this.minPavedPercent,
         seed: Date.now(),
       })
       .subscribe({
@@ -120,7 +124,11 @@ export class AppComponent implements AfterViewInit, OnDestroy {
       this.targetDistanceKm >= 1 &&
       this.targetDistanceKm <= 100 &&
       this.maxStartDistanceKm >= 0 &&
-      this.maxStartDistanceKm <= 25
+      this.maxStartDistanceKm <= 25 &&
+      this.estimatedPaceMinPerKm >= 2 &&
+      this.estimatedPaceMinPerKm <= 20 &&
+      this.minPavedPercent >= 0 &&
+      this.minPavedPercent <= 100
     );
   }
 

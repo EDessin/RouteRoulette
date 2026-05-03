@@ -11,7 +11,9 @@ export interface GenerateRouteRequest {
   home: Coordinate;
   targetDistanceKm: number;
   maxStartDistanceKm: number;
+  estimatedPaceMinPerKm?: number;
   preferPaved: boolean;
+  minPavedPercent: number;
   seed?: number;
 }
 

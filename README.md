@@ -13,6 +13,8 @@ This repository now contains an MVP with:
 - A Go REST API in `backend/`
 - An Angular + PrimeNG frontend in `frontend/`
 - A route generation form for target distance, home coordinates, max start radius, and paved preference
+- Estimated run duration based on your pace in minutes per kilometer
+- Minimum paved percentage targeting for route candidate scoring
 - A map view that displays the generated circular route
 - OpenRouteService integration for real round-trip route generation
 - A mock route fallback for local UI development when no OpenRouteService API key is configured
@@ -75,7 +77,9 @@ Example body:
   },
   "targetDistanceKm": 8,
   "maxStartDistanceKm": 2,
-  "preferPaved": true
+  "estimatedPaceMinPerKm": 6,
+  "preferPaved": true,
+  "minPavedPercent": 70
 }
 ```
 
@@ -84,6 +88,8 @@ Example body:
 OpenRouteService round-trip routing treats the requested length as a target, not a guarantee. The backend retries with different seeds and returns the best route it finds.
 
 Paved-route preference depends on available OpenStreetMap surface data. When the provider does not return enough surface detail, the API returns a warning instead of pretending to know.
+
+Minimum paved percentage is used as a route scoring target. The backend retries candidates and returns the best match it can find; provider and map data limitations mean this is not always a hard guarantee.
 
 ## Project Status
 
