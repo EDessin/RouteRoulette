@@ -32,8 +32,8 @@ import { Coordinate, RouteApiService, RouteResponse } from './route-api.service'
 export class AppComponent implements AfterViewInit, OnDestroy {
   @ViewChild('map', { static: true }) private readonly mapElement!: ElementRef<HTMLDivElement>;
 
-  homeLat = 50.8503;
-  homeLon = 4.3517;
+  homeLat = 50.9950381;
+  homeLon = 4.7699273;
   targetDistanceKm = 8;
   maxStartDistanceKm = 2;
   estimatedPaceMinPerKm = 6;

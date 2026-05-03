@@ -72,8 +72,8 @@ Example body:
 ```json
 {
   "home": {
-    "lat": 50.8503,
-    "lon": 4.3517
+    "lat": 50.9950381,
+    "lon": 4.7699273
   },
   "targetDistanceKm": 8,
   "maxStartDistanceKm": 2,
