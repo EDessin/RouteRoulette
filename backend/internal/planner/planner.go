@@ -48,7 +48,9 @@ func (p Planner) Generate(r *http.Request, req GenerateRouteRequest) (RouteRespo
 }
 
 func (p Planner) bestCandidate(r *http.Request, req GenerateRouteRequest, targetM float64, seed int64) (CandidateRoute, error) {
-	const attempts = 8
+	const attempts = 16
+
+	lengthMultipliers := []float64{1.03, 1.06, 1.1, 1.15, 1.22, 1.3, 1.4, 1.55}
 
 	var best CandidateRoute
 	bestScore := math.MaxFloat64
@@ -56,6 +58,7 @@ func (p Planner) bestCandidate(r *http.Request, req GenerateRouteRequest, target
 
 	for i := 0; i < attempts; i++ {
 		candidateSeed := seed + int64(i*7919)
+		requestedDistanceM := targetM * lengthMultipliers[i%len(lengthMultipliers)]
 		start := req.Home
 		if i > 0 && req.MaxStartDistanceKm > 0 {
 			start = randomPointWithin(req.Home, req.MaxStartDistanceKm, candidateSeed)
@@ -63,7 +66,7 @@ func (p Planner) bestCandidate(r *http.Request, req GenerateRouteRequest, target
 
 		route, err := p.provider.GenerateRoundTrip(r, CandidateRequest{
 			Start:           start,
-			TargetDistanceM: targetM,
+			TargetDistanceM: requestedDistanceM,
 			PreferPaved:     req.PreferPaved,
 			MinPavedPercent: req.MinPavedPercent,
 			Seed:            candidateSeed,
@@ -73,13 +76,13 @@ func (p Planner) bestCandidate(r *http.Request, req GenerateRouteRequest, target
 			continue
 		}
 
-		score := routeScore(route, targetM, req.PreferPaved, req.MinPavedPercent)
+		score := routeScore(route, targetM, req.MinPavedPercent)
 		if score < bestScore {
 			best = route
 			bestScore = score
 		}
 
-		if score <= 0.05 && satisfiesPavedThreshold(route, req.MinPavedPercent) {
+		if isGoodEnough(route, targetM, req.MinPavedPercent) {
 			return route, nil
 		}
 	}
@@ -91,18 +94,27 @@ func (p Planner) bestCandidate(r *http.Request, req GenerateRouteRequest, target
 	return CandidateRoute{}, lastErr
 }
 
-func routeScore(route CandidateRoute, targetM float64, preferPaved bool, minPavedPercent float64) float64 {
-	distanceError := math.Abs(route.DistanceM-targetM) / targetM
-	if (preferPaved || minPavedPercent > 0) && route.PavedPercent != nil {
-		shortfall := math.Max(0, minPavedPercent-*route.PavedPercent) / 100
-		unpavedPenalty := (100 - *route.PavedPercent) / 100
-		return distanceError + shortfall*2 + unpavedPenalty*0.25
+func routeScore(route CandidateRoute, targetM float64, minPavedPercent float64) float64 {
+	pavedShortfall := pavedShortfall(route, minPavedPercent)
+	shortRoutePenalty := math.Max(0, targetM-route.DistanceM) / targetM
+	extraDistancePenalty := math.Max(0, route.DistanceM-targetM) / targetM
+
+	if minPavedPercent > 0 {
+		return pavedShortfall*100 + shortRoutePenalty*50 + extraDistancePenalty
 	}
-	return distanceError
+
+	return shortRoutePenalty*50 + extraDistancePenalty
 }
 
-func satisfiesPavedThreshold(route CandidateRoute, minPavedPercent float64) bool {
-	return minPavedPercent <= 0 || route.PavedPercent == nil || *route.PavedPercent >= minPavedPercent
+func pavedShortfall(route CandidateRoute, minPavedPercent float64) float64 {
+	if minPavedPercent <= 0 || route.PavedPercent == nil {
+		return 0
+	}
+	return math.Max(0, minPavedPercent-*route.PavedPercent) / 100
+}
+
+func isGoodEnough(route CandidateRoute, targetM float64, minPavedPercent float64) bool {
+	return route.DistanceM >= targetM && pavedShortfall(route, minPavedPercent) == 0
 }
 
 func routeResponse(route CandidateRoute, req GenerateRouteRequest, warnings []string) RouteResponse {
@@ -110,8 +122,10 @@ func routeResponse(route CandidateRoute, req GenerateRouteRequest, warnings []st
 	allWarnings = append(allWarnings, warnings...)
 
 	actualKm := route.DistanceM / 1000
-	if math.Abs(actualKm-req.TargetDistanceKm)/req.TargetDistanceKm > 0.10 {
-		allWarnings = append(allWarnings, "The generated route is more than 10% away from the requested distance.")
+	if actualKm < req.TargetDistanceKm {
+		allWarnings = append(allWarnings, "The best route found is shorter than requested. Try lowering the minimum paved percentage or increasing the start radius.")
+	} else if actualKm > req.TargetDistanceKm*1.10 {
+		allWarnings = append(allWarnings, "The generated route is longer than requested to better satisfy the paved-road target.")
 	}
 	if req.MinPavedPercent > 0 && route.PavedPercent == nil {
 		allWarnings = append(allWarnings, "Surface data was not available, so the minimum paved percentage could not be verified.")
