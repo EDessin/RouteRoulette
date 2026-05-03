@@ -34,10 +34,10 @@ import { Coordinate, RouteApiService, RouteResponse } from './route-api.service'
 export class AppComponent implements AfterViewInit, OnDestroy {
   @ViewChild('map', { static: true }) private readonly mapElement!: ElementRef<HTMLDivElement>;
 
-  homeAddress = '50.9950381, 4.7699273';
+  homeAddress = 'Bossepleinstraat 121, 3130 Betekom';
   resolvedHomeLabel = this.homeAddress;
   targetDistanceKm = 8;
-  maxStartDistanceKm = 2;
+  maxStartDistanceKm = 0;
   estimatedPaceMinPerKm = 6;
   preferPaved = true;
   minPavedPercent = 70;
