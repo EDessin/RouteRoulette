@@ -81,6 +81,7 @@ The local OSM route engine:
 - generates circular route candidates locally
 - prioritizes paved percentage over exact distance
 - avoids routes shorter than requested when possible
+- rejects local route candidates that reuse the same road segment
 - returns paved, unpaved, and unknown-surface percentages
 
 If local OSM routing cannot build or use a graph, the backend falls back to OpenRouteService if `ORS_API_KEY` is configured, and then to mock routes when `ALLOW_MOCK_ROUTES=true`.

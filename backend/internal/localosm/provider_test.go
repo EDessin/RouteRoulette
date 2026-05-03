@@ -55,3 +55,15 @@ func TestLocalScorePenalizesRoutesMoreThanHalfKilometerLong(t *testing.T) {
 		t.Fatal("expected local scoring to penalize routes more than 0.5 km longer than requested")
 	}
 }
+
+func TestHasRepeatedEdgesDetectsOutAndBack(t *testing.T) {
+	if !hasRepeatedEdges([]int{1, 2, 1}) {
+		t.Fatal("expected an out-and-back path to count as a repeated road segment")
+	}
+}
+
+func TestHasRepeatedEdgesAllowsSimpleLoop(t *testing.T) {
+	if hasRepeatedEdges([]int{1, 2, 3, 1}) {
+		t.Fatal("expected a simple loop without repeated segments to be allowed")
+	}
+}

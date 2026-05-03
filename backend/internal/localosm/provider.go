@@ -370,7 +370,7 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest) (planner.CandidateRou
 	rng := rand.New(rand.NewSource(req.Seed))
 	best := localCandidate{}
 	bestScore := math.MaxFloat64
-	attempts := 12
+	attempts := 40
 	for i := 0; i < attempts; i++ {
 		candidate, err := g.loopCandidate(start, req.TargetDistanceM, req.MinPavedPercent, rng)
 		if err != nil {
@@ -453,6 +453,9 @@ func (g *Graph) loopCandidate(start int, targetM float64, minPavedPercent float6
 	if total == 0 {
 		return localCandidate{}, errors.New("route has zero distance")
 	}
+	if hasRepeatedEdges(fullPath) {
+		return localCandidate{}, errors.New("route repeats a road segment")
+	}
 	return localCandidate{
 		Path:           fullPath,
 		DistanceM:      total,
@@ -460,6 +463,30 @@ func (g *Graph) loopCandidate(start int, targetM float64, minPavedPercent float6
 		UnpavedPercent: unpaved / total * 100,
 		UnknownPercent: unknown / total * 100,
 	}, nil
+}
+
+func hasRepeatedEdges(path []int) bool {
+	seen := make(map[edgeKey]struct{})
+	for i := 1; i < len(path); i++ {
+		key := newEdgeKey(path[i-1], path[i])
+		if _, ok := seen[key]; ok {
+			return true
+		}
+		seen[key] = struct{}{}
+	}
+	return false
+}
+
+type edgeKey struct {
+	A int
+	B int
+}
+
+func newEdgeKey(a int, b int) edgeKey {
+	if a > b {
+		a, b = b, a
+	}
+	return edgeKey{A: a, B: b}
 }
 
 func (g *Graph) nearestNode(coord planner.Coordinate) int {
