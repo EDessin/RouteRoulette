@@ -67,3 +67,57 @@ func TestHasRepeatedEdgesAllowsSimpleLoop(t *testing.T) {
 		t.Fatal("expected a simple loop without repeated segments to be allowed")
 	}
 }
+
+func TestShortestPathSkipsUnpavedEdgesWhenPavedOnly(t *testing.T) {
+	graph := Graph{
+		Nodes: []GraphNode{
+			{Lat: 0, Lon: 0},
+			{Lat: 0, Lon: 1},
+			{Lat: 1, Lon: 0},
+		},
+		Edges: [][]GraphEdge{
+			{
+				{To: 1, Distance: 1, Surface: SurfaceUnpaved},
+				{To: 2, Distance: 1, Surface: SurfacePaved},
+			},
+			{
+				{To: 0, Distance: 1, Surface: SurfaceUnpaved},
+				{To: 2, Distance: 1, Surface: SurfacePaved},
+			},
+			{
+				{To: 0, Distance: 1, Surface: SurfacePaved},
+				{To: 1, Distance: 1, Surface: SurfacePaved},
+			},
+		},
+	}
+
+	path, edges, err := graph.shortestPath(0, 1, 70, true)
+	if err != nil {
+		t.Fatalf("shortestPath() returned error: %v", err)
+	}
+	if len(path) != 3 || path[0] != 0 || path[1] != 2 || path[2] != 1 {
+		t.Fatalf("shortestPath() path = %v, want [0 2 1]", path)
+	}
+	for _, edge := range edges {
+		if edge.Surface != SurfacePaved {
+			t.Fatal("expected paved-only path to contain only paved edges")
+		}
+	}
+}
+
+func TestShortestPathReturnsErrorWhenNoPavedPathExists(t *testing.T) {
+	graph := Graph{
+		Nodes: []GraphNode{
+			{Lat: 0, Lon: 0},
+			{Lat: 0, Lon: 1},
+		},
+		Edges: [][]GraphEdge{
+			{{To: 1, Distance: 1, Surface: SurfaceUnknown}},
+			{{To: 0, Distance: 1, Surface: SurfaceUnknown}},
+		},
+	}
+
+	if _, _, err := graph.shortestPath(0, 1, 70, true); err == nil {
+		t.Fatal("expected no paved-only path to return an error")
+	}
+}

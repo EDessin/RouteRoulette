@@ -12,7 +12,7 @@ This repository now contains an MVP with:
 
 - A Go REST API in `backend/`
 - An Angular + PrimeNG frontend in `frontend/`
-- A route generation form for home address, target distance, max start radius, and paved preference
+- A route generation form for home address, target distance, max start radius, and paved-only routing
 - Estimated run duration based on your pace in minutes per kilometer
 - Minimum paved percentage targeting for route candidate scoring
 - A map view that displays the generated circular route
@@ -79,6 +79,7 @@ The local OSM route engine:
 - imports runnable/walkable roads within 50 km of the home location
 - classifies road surface from OSM tags such as `surface=asphalt`, `surface=gravel`, and `tracktype=grade1`
 - generates circular route candidates locally
+- uses paved roads only when paved routing is enabled
 - prioritizes paved percentage over exact distance
 - avoids routes shorter than requested when possible
 - rejects local route candidates that reuse the same road segment

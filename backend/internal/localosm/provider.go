@@ -372,7 +372,7 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest) (planner.CandidateRou
 	bestScore := math.MaxFloat64
 	attempts := 40
 	for i := 0; i < attempts; i++ {
-		candidate, err := g.loopCandidate(start, req.TargetDistanceM, req.MinPavedPercent, rng)
+		candidate, err := g.loopCandidate(start, req.TargetDistanceM, req.MinPavedPercent, pavedOnly(req), rng)
 		if err != nil {
 			continue
 		}
@@ -420,7 +420,11 @@ type localCandidate struct {
 	UnknownPercent float64
 }
 
-func (g *Graph) loopCandidate(start int, targetM float64, minPavedPercent float64, rng *rand.Rand) (localCandidate, error) {
+func pavedOnly(req planner.CandidateRequest) bool {
+	return req.PreferPaved || req.MinPavedPercent > 0
+}
+
+func (g *Graph) loopCandidate(start int, targetM float64, minPavedPercent float64, pavedOnly bool, rng *rand.Rand) (localCandidate, error) {
 	radiusM := math.Max(600, targetM/(2*math.Pi))
 	baseBearing := rng.Float64() * 2 * math.Pi
 	waypoints := make([]int, 0, 3)
@@ -435,7 +439,7 @@ func (g *Graph) loopCandidate(start int, targetM float64, minPavedPercent float6
 	fullPath := []int{}
 	var edges []GraphEdge
 	for i := 1; i < len(points); i++ {
-		path, pathEdges, err := g.shortestPath(points[i-1], points[i], minPavedPercent)
+		path, pathEdges, err := g.shortestPath(points[i-1], points[i], minPavedPercent, pavedOnly)
 		if err != nil {
 			return localCandidate{}, err
 		}
@@ -508,7 +512,7 @@ func (g *Graph) nodeNearProjection(start int, bearing float64, distanceM float64
 	return g.nearestNode(planner.Coordinate{Lat: targetLat, Lon: targetLon})
 }
 
-func (g *Graph) shortestPath(start int, goal int, minPavedPercent float64) ([]int, []GraphEdge, error) {
+func (g *Graph) shortestPath(start int, goal int, minPavedPercent float64, pavedOnly bool) ([]int, []GraphEdge, error) {
 	if start == goal {
 		return []int{start}, nil, nil
 	}
@@ -532,6 +536,9 @@ func (g *Graph) shortestPath(start int, goal int, minPavedPercent float64) ([]in
 			break
 		}
 		for _, edge := range g.Edges[item.Node] {
+			if pavedOnly && edge.Surface != SurfacePaved {
+				continue
+			}
 			cost := edge.Distance * surfaceWeight(edge.Surface, minPavedPercent)
 			next := item.Priority + cost
 			if next < dist[edge.To] {
