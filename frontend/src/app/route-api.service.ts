@@ -38,6 +38,8 @@ export interface RouteResponse {
   durationMinutes: number;
   geometry: GeoJsonLineString;
   pavedPercent?: number;
+  unpavedPercent?: number;
+  unknownSurfacePercent?: number;
   provider: string;
   warnings?: string[];
 }

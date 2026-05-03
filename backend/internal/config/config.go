@@ -11,6 +11,12 @@ type Config struct {
 	ORSAPIKey         string
 	CORSAllowedOrigin string
 	AllowMockRoutes   bool
+	RoutingProvider   string
+	OSMDataDir        string
+	OSMExtractPath    string
+	OSMExtractURL     string
+	OSMRadiusKm       float64
+	AllowOSMDownload  bool
 }
 
 func Load() Config {
@@ -20,6 +26,12 @@ func Load() Config {
 		ORSAPIKey:         os.Getenv("ORS_API_KEY"),
 		CORSAllowedOrigin: getEnv("CORS_ALLOWED_ORIGIN", "http://localhost:4200"),
 		AllowMockRoutes:   getEnvBool("ALLOW_MOCK_ROUTES", true),
+		RoutingProvider:   getEnv("ROUTING_PROVIDER", "local_osm"),
+		OSMDataDir:        getEnv("OSM_DATA_DIR", "data/osm"),
+		OSMExtractPath:    getEnv("OSM_EXTRACT_PATH", "data/osm/belgium-latest.osm.pbf"),
+		OSMExtractURL:     getEnv("OSM_EXTRACT_URL", "https://download.geofabrik.de/europe/belgium-latest.osm.pbf"),
+		OSMRadiusKm:       getEnvFloat("OSM_RADIUS_KM", 50),
+		AllowOSMDownload:  getEnvBool("ALLOW_OSM_DOWNLOAD", true),
 	}
 }
 
@@ -37,6 +49,18 @@ func getEnvBool(key string, fallback bool) bool {
 		return fallback
 	}
 	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func getEnvFloat(key string, fallback float64) float64 {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
 	if err != nil {
 		return fallback
 	}

@@ -118,6 +118,18 @@
             <strong>{{ route.pavedPercent | number: '1.0-0' }}%</strong>
           </div>
         }
+        @if (route.unpavedPercent !== undefined) {
+          <div>
+            <span>Unpaved</span>
+            <strong>{{ route.unpavedPercent | number: '1.0-0' }}%</strong>
+          </div>
+        }
+        @if (route.unknownSurfacePercent !== undefined) {
+          <div>
+            <span>Unknown</span>
+            <strong>{{ route.unknownSurfacePercent | number: '1.0-0' }}%</strong>
+          </div>
+        }
         <p-tag [value]="route.provider" severity="secondary" />
       </section>
     }

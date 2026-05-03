@@ -32,14 +32,16 @@ type GenerateRouteRequest struct {
 }
 
 type RouteResponse struct {
-	RouteID         string      `json:"routeId"`
-	Start           Coordinate  `json:"start"`
-	DistanceKm      float64     `json:"distanceKm"`
-	DurationMinutes float64     `json:"durationMinutes"`
-	Geometry        GeoJSONLine `json:"geometry"`
-	PavedPercent    *float64    `json:"pavedPercent,omitempty"`
-	Provider        string      `json:"provider"`
-	Warnings        []string    `json:"warnings,omitempty"`
+	RouteID               string      `json:"routeId"`
+	Start                 Coordinate  `json:"start"`
+	DistanceKm            float64     `json:"distanceKm"`
+	DurationMinutes       float64     `json:"durationMinutes"`
+	Geometry              GeoJSONLine `json:"geometry"`
+	PavedPercent          *float64    `json:"pavedPercent,omitempty"`
+	UnpavedPercent        *float64    `json:"unpavedPercent,omitempty"`
+	UnknownSurfacePercent *float64    `json:"unknownSurfacePercent,omitempty"`
+	Provider              string      `json:"provider"`
+	Warnings              []string    `json:"warnings,omitempty"`
 }
 
 type GeoJSONLine struct {
@@ -49,6 +51,7 @@ type GeoJSONLine struct {
 
 type CandidateRequest struct {
 	Start           Coordinate
+	Home            Coordinate
 	TargetDistanceM float64
 	PreferPaved     bool
 	MinPavedPercent float64
@@ -61,6 +64,8 @@ type CandidateRoute struct {
 	DurationSeconds float64
 	Geometry        GeoJSONLine
 	PavedPercent    *float64
+	UnpavedPercent  *float64
+	UnknownPercent  *float64
 	Provider        string
 	Warnings        []string
 }

@@ -3,6 +3,8 @@
 # Go
 backend/bin/
 backend/tmp/
+backend/data/osm/*
+!backend/data/osm/.gitkeep
 
 # Angular / Node
 frontend/.angular/

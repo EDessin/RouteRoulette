@@ -48,7 +48,7 @@ func (p Planner) Generate(r *http.Request, req GenerateRouteRequest) (RouteRespo
 }
 
 func (p Planner) bestCandidate(r *http.Request, req GenerateRouteRequest, targetM float64, seed int64) (CandidateRoute, error) {
-	const attempts = 100
+	const attempts = 500
 
 	lengthMultipliers := []float64{1.03, 1.06, 1.1, 1.15, 1.22, 1.3, 1.4, 1.55, 1.7, 1.9}
 
@@ -66,6 +66,7 @@ func (p Planner) bestCandidate(r *http.Request, req GenerateRouteRequest, target
 
 		route, err := p.provider.GenerateRoundTrip(r, CandidateRequest{
 			Start:           start,
+			Home:            req.Home,
 			TargetDistanceM: requestedDistanceM,
 			PreferPaved:     req.PreferPaved,
 			MinPavedPercent: req.MinPavedPercent,
@@ -158,14 +159,16 @@ func routeResponse(route CandidateRoute, req GenerateRouteRequest, warnings []st
 	}
 
 	return RouteResponse{
-		RouteID:         fmt.Sprintf("%d", time.Now().UnixNano()),
-		Start:           route.Start,
-		DistanceKm:      round(actualKm, 2),
-		DurationMinutes: round(durationMinutes, 1),
-		Geometry:        route.Geometry,
-		PavedPercent:    route.PavedPercent,
-		Provider:        route.Provider,
-		Warnings:        allWarnings,
+		RouteID:               fmt.Sprintf("%d", time.Now().UnixNano()),
+		Start:                 route.Start,
+		DistanceKm:            round(actualKm, 2),
+		DurationMinutes:       round(durationMinutes, 1),
+		Geometry:              route.Geometry,
+		PavedPercent:          route.PavedPercent,
+		UnpavedPercent:        route.UnpavedPercent,
+		UnknownSurfacePercent: route.UnknownPercent,
+		Provider:              route.Provider,
+		Warnings:              allWarnings,
 	}
 }
 

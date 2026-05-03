@@ -16,7 +16,8 @@ This repository now contains an MVP with:
 - Estimated run duration based on your pace in minutes per kilometer
 - Minimum paved percentage targeting for route candidate scoring
 - A map view that displays the generated circular route
-- OpenRouteService integration for real round-trip route generation
+- Local OpenStreetMap route generation from a cached Belgium extract
+- OpenRouteService fallback for geocoding and backup route generation
 - A mock route fallback for local UI development when no OpenRouteService API key is configured
 
 ## What It Does
@@ -37,12 +38,24 @@ cp .env.example .env
 
 Set `ORS_API_KEY` in `backend/.env` if you want real routes from OpenRouteService.
 
+By default, route generation uses local OpenStreetMap data:
+
+```text
+ROUTING_PROVIDER=local_osm
+OSM_EXTRACT_PATH=data/osm/belgium-latest.osm.pbf
+ALLOW_OSM_DOWNLOAD=true
+```
+
+On first use, the backend downloads and stores the Belgium extract at `backend/data/osm/belgium-latest.osm.pbf`. It then builds a 50 km road graph around the home location and stores it under `backend/data/osm/road-cache/`. Later route requests for the same home location reuse that stored road graph instead of re-reading the full extract.
+
+The stored OSM data is intentionally ignored by Git because it is large and machine-local.
+
 Run:
 
 ```bash
 cd backend
 export $(grep -v '^#' .env | xargs)
-go run ./cmd/api
+CGO_ENABLED=0 go run ./cmd/api
 ```
 
 The API listens on `http://localhost:8080`.
@@ -58,6 +71,19 @@ npm start
 ```
 
 The Angular app runs on `http://localhost:4200` and proxies `/api` requests to the Go backend.
+
+## Local OSM Routing
+
+The local OSM route engine:
+
+- imports runnable/walkable roads within 50 km of the home location
+- classifies road surface from OSM tags such as `surface=asphalt`, `surface=gravel`, and `tracktype=grade1`
+- generates circular route candidates locally
+- prioritizes paved percentage over exact distance
+- avoids routes shorter than requested when possible
+- returns paved, unpaved, and unknown-surface percentages
+
+If local OSM routing cannot build or use a graph, the backend falls back to OpenRouteService if `ORS_API_KEY` is configured, and then to mock routes when `ALLOW_MOCK_ROUTES=true`.
 
 ## API
 
@@ -99,7 +125,7 @@ Example body:
 
 ## Notes
 
-OpenRouteService round-trip routing treats the requested length as a target, not a guarantee. The backend retries with different seeds and returns the best route it finds.
+OpenRouteService round-trip routing treats the requested length as a target, not a guarantee. When the OpenRouteService fallback is used, the backend retries with different seeds and returns the best route it finds.
 
 Paved-route preference depends on available OpenStreetMap surface data. When the provider does not return enough surface detail, the API returns a warning instead of pretending to know.
 
