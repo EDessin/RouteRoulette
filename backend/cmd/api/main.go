@@ -24,7 +24,7 @@ func main() {
 			ExtractURL:    cfg.OSMExtractURL,
 			RadiusKm:      cfg.OSMRadiusKm,
 			AllowDownload: cfg.AllowOSMDownload,
-		}, orsClient)
+		})
 	}
 	routePlanner := planner.New(routeProvider, cfg.AllowMockRoutes)
 	server := api.NewServer(cfg, routePlanner, orsClient)

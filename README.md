@@ -80,12 +80,13 @@ The local OSM route engine:
 - classifies road surface from OSM tags such as `surface=asphalt`, `surface=gravel`, and `tracktype=grade1`
 - generates circular route candidates locally
 - uses paved roads only when paved routing is enabled
+- uses A* path search with reusable search buffers for candidate generation
 - prioritizes paved percentage over exact distance
 - avoids routes shorter than requested when possible
 - rejects local route candidates that reuse the same road segment
 - returns paved, unpaved, and unknown-surface percentages
 
-If local OSM routing cannot build or use a graph, the backend falls back to OpenRouteService if `ORS_API_KEY` is configured, and then to mock routes when `ALLOW_MOCK_ROUTES=true`.
+If local OSM routing cannot build or use a graph, the backend returns that error directly. OpenRouteService is still used for address geocoding, but no longer as a route-generation fallback.
 
 ## API
 
@@ -127,7 +128,7 @@ Example body:
 
 ## Notes
 
-OpenRouteService round-trip routing treats the requested length as a target, not a guarantee. When the OpenRouteService fallback is used, the backend retries with different seeds and returns the best route it finds.
+OpenRouteService is used for address geocoding only. Route generation is local OSM only.
 
 Paved-route preference depends on available OpenStreetMap surface data. When the provider does not return enough surface detail, the API returns a warning instead of pretending to know.
 

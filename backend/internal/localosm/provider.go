@@ -35,12 +35,11 @@ type Config struct {
 }
 
 type Provider struct {
-	cfg      Config
-	fallback planner.RouteProvider
-	client   *http.Client
+	cfg    Config
+	client *http.Client
 }
 
-func NewProvider(cfg Config, fallback planner.RouteProvider) Provider {
+func NewProvider(cfg Config) Provider {
 	if cfg.DataDir == "" {
 		cfg.DataDir = "data/osm"
 	}
@@ -55,8 +54,7 @@ func NewProvider(cfg Config, fallback planner.RouteProvider) Provider {
 	}
 
 	return Provider{
-		cfg:      cfg,
-		fallback: fallback,
+		cfg: cfg,
 		client: &http.Client{
 			Timeout: 20 * time.Minute,
 		},
@@ -66,26 +64,11 @@ func NewProvider(cfg Config, fallback planner.RouteProvider) Provider {
 func (p Provider) GenerateRoundTrip(ctxReq *http.Request, req planner.CandidateRequest) (planner.CandidateRoute, error) {
 	graph, err := p.loadGraph(ctxReq.Context(), req.Home)
 	if err != nil {
-		if p.fallback != nil {
-			route, fallbackErr := p.fallback.GenerateRoundTrip(ctxReq, req)
-			if fallbackErr == nil {
-				route.Warnings = append(route.Warnings, fmt.Sprintf("Local OSM routing unavailable: %v", err))
-				return route, nil
-			}
-			return planner.CandidateRoute{}, fmt.Errorf("local OSM routing failed: %v; fallback failed: %v", err, fallbackErr)
-		}
 		return planner.CandidateRoute{}, err
 	}
 
 	route, err := graph.GenerateLoop(req)
 	if err != nil {
-		if p.fallback != nil {
-			fallbackRoute, fallbackErr := p.fallback.GenerateRoundTrip(ctxReq, req)
-			if fallbackErr == nil {
-				fallbackRoute.Warnings = append(fallbackRoute.Warnings, fmt.Sprintf("Local OSM routing failed: %v", err))
-				return fallbackRoute, nil
-			}
-		}
 		return planner.CandidateRoute{}, err
 	}
 	return route, nil
@@ -371,8 +354,10 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest) (planner.CandidateRou
 	best := localCandidate{}
 	bestScore := math.MaxFloat64
 	attempts := 40
+	nearestCache := make(map[projectionKey]int)
+	search := g.newSearchWorkspace()
 	for i := 0; i < attempts; i++ {
-		candidate, err := g.loopCandidate(start, req.TargetDistanceM, req.MinPavedPercent, pavedOnly(req), rng)
+		candidate, err := g.loopCandidate(start, req.TargetDistanceM, req.MinPavedPercent, pavedOnly(req), rng, nearestCache, search)
 		if err != nil {
 			continue
 		}
@@ -424,14 +409,14 @@ func pavedOnly(req planner.CandidateRequest) bool {
 	return req.PreferPaved || req.MinPavedPercent > 0
 }
 
-func (g *Graph) loopCandidate(start int, targetM float64, minPavedPercent float64, pavedOnly bool, rng *rand.Rand) (localCandidate, error) {
+func (g *Graph) loopCandidate(start int, targetM float64, minPavedPercent float64, pavedOnly bool, rng *rand.Rand, nearestCache map[projectionKey]int, search *searchWorkspace) (localCandidate, error) {
 	radiusM := math.Max(600, targetM/(2*math.Pi))
 	baseBearing := rng.Float64() * 2 * math.Pi
 	waypoints := make([]int, 0, 3)
 	for i := 0; i < 3; i++ {
 		bearing := baseBearing + float64(i)*2*math.Pi/3
 		distance := radiusM * (0.75 + rng.Float64()*0.75)
-		waypoints = append(waypoints, g.nodeNearProjection(start, bearing, distance))
+		waypoints = append(waypoints, g.nodeNearProjection(start, bearing, distance, nearestCache))
 	}
 	points := append([]int{start}, waypoints...)
 	points = append(points, start)
@@ -439,7 +424,7 @@ func (g *Graph) loopCandidate(start int, targetM float64, minPavedPercent float6
 	fullPath := []int{}
 	var edges []GraphEdge
 	for i := 1; i < len(points); i++ {
-		path, pathEdges, err := g.shortestPath(points[i-1], points[i], minPavedPercent, pavedOnly)
+		path, pathEdges, err := g.shortestPath(points[i-1], points[i], minPavedPercent, pavedOnly, search)
 		if err != nil {
 			return localCandidate{}, err
 		}
@@ -506,32 +491,39 @@ func (g *Graph) nearestNode(coord planner.Coordinate) int {
 	return bestIdx
 }
 
-func (g *Graph) nodeNearProjection(start int, bearing float64, distanceM float64) int {
-	startNode := g.Nodes[start]
-	targetLat, targetLon := project(startNode.Lat, startNode.Lon, bearing, distanceM)
-	return g.nearestNode(planner.Coordinate{Lat: targetLat, Lon: targetLon})
+type projectionKey struct {
+	BearingBucket  int
+	DistanceBucket int
 }
 
-func (g *Graph) shortestPath(start int, goal int, minPavedPercent float64, pavedOnly bool) ([]int, []GraphEdge, error) {
+func (g *Graph) nodeNearProjection(start int, bearing float64, distanceM float64, cache map[projectionKey]int) int {
+	key := projectionKey{
+		BearingBucket:  int(math.Round(bearing * 180 / math.Pi / 5)),
+		DistanceBucket: int(math.Round(distanceM / 100)),
+	}
+	if idx, ok := cache[key]; ok {
+		return idx
+	}
+	startNode := g.Nodes[start]
+	targetLat, targetLon := project(startNode.Lat, startNode.Lon, bearing, distanceM)
+	idx := g.nearestNode(planner.Coordinate{Lat: targetLat, Lon: targetLon})
+	cache[key] = idx
+	return idx
+}
+
+func (g *Graph) shortestPath(start int, goal int, minPavedPercent float64, pavedOnly bool, search *searchWorkspace) ([]int, []GraphEdge, error) {
 	if start == goal {
 		return []int{start}, nil, nil
 	}
-	dist := make([]float64, len(g.Nodes))
-	prev := make([]int, len(g.Nodes))
-	prevEdge := make([]GraphEdge, len(g.Nodes))
-	for i := range dist {
-		dist[i] = math.MaxFloat64
-		prev[i] = -1
-	}
-	dist[start] = 0
-	pq := priorityQueue{{Node: start, Priority: 0}}
+	search.Reset()
+	search.Dist[start] = 0
+	search.Prev[start] = -1
+	search.Touched = append(search.Touched, start)
+	pq := priorityQueue{{Node: start, Priority: heuristicM(g, start, goal)}}
 	heap.Init(&pq)
 
 	for pq.Len() > 0 {
 		item := heap.Pop(&pq).(queueItem)
-		if item.Priority > dist[item.Node] {
-			continue
-		}
 		if item.Node == goal {
 			break
 		}
@@ -540,25 +532,28 @@ func (g *Graph) shortestPath(start int, goal int, minPavedPercent float64, paved
 				continue
 			}
 			cost := edge.Distance * surfaceWeight(edge.Surface, minPavedPercent)
-			next := item.Priority + cost
-			if next < dist[edge.To] {
-				dist[edge.To] = next
-				prev[edge.To] = item.Node
-				prevEdge[edge.To] = edge
-				heap.Push(&pq, queueItem{Node: edge.To, Priority: next})
+			next := search.Dist[item.Node] + cost
+			if next < search.Dist[edge.To] {
+				if search.Dist[edge.To] == math.MaxFloat64 {
+					search.Touched = append(search.Touched, edge.To)
+				}
+				search.Dist[edge.To] = next
+				search.Prev[edge.To] = item.Node
+				search.PrevEdge[edge.To] = edge
+				heap.Push(&pq, queueItem{Node: edge.To, Priority: next + heuristicM(g, edge.To, goal)})
 			}
 		}
 	}
-	if prev[goal] == -1 {
+	if search.Prev[goal] == -1 {
 		return nil, nil, errors.New("no path between selected local OSM waypoints")
 	}
 
 	var path []int
 	var edges []GraphEdge
-	for at := goal; at != -1; at = prev[at] {
+	for at := goal; at != -1; at = search.Prev[at] {
 		path = append(path, at)
 		if at != start {
-			edges = append(edges, prevEdge[at])
+			edges = append(edges, search.PrevEdge[at])
 		}
 		if at == start {
 			break
@@ -567,6 +562,41 @@ func (g *Graph) shortestPath(start int, goal int, minPavedPercent float64, paved
 	reverseInts(path)
 	reverseEdges(edges)
 	return path, edges, nil
+}
+
+type searchWorkspace struct {
+	Dist     []float64
+	Prev     []int
+	PrevEdge []GraphEdge
+	Touched  []int
+}
+
+func (g *Graph) newSearchWorkspace() *searchWorkspace {
+	search := &searchWorkspace{
+		Dist:     make([]float64, len(g.Nodes)),
+		Prev:     make([]int, len(g.Nodes)),
+		PrevEdge: make([]GraphEdge, len(g.Nodes)),
+	}
+	for i := range search.Dist {
+		search.Dist[i] = math.MaxFloat64
+		search.Prev[i] = -1
+	}
+	return search
+}
+
+func (s *searchWorkspace) Reset() {
+	for _, idx := range s.Touched {
+		s.Dist[idx] = math.MaxFloat64
+		s.Prev[idx] = -1
+		s.PrevEdge[idx] = GraphEdge{}
+	}
+	s.Touched = s.Touched[:0]
+}
+
+func heuristicM(g *Graph, from int, to int) float64 {
+	a := g.Nodes[from]
+	b := g.Nodes[to]
+	return distanceM(a.Lat, a.Lon, b.Lat, b.Lon)
 }
 
 func surfaceWeight(surface int, minPavedPercent float64) float64 {

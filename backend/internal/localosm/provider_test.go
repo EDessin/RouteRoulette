@@ -91,7 +91,7 @@ func TestShortestPathSkipsUnpavedEdgesWhenPavedOnly(t *testing.T) {
 		},
 	}
 
-	path, edges, err := graph.shortestPath(0, 1, 70, true)
+	path, edges, err := graph.shortestPath(0, 1, 70, true, graph.newSearchWorkspace())
 	if err != nil {
 		t.Fatalf("shortestPath() returned error: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestShortestPathReturnsErrorWhenNoPavedPathExists(t *testing.T) {
 		},
 	}
 
-	if _, _, err := graph.shortestPath(0, 1, 70, true); err == nil {
+	if _, _, err := graph.shortestPath(0, 1, 70, true, graph.newSearchWorkspace()); err == nil {
 		t.Fatal("expected no paved-only path to return an error")
 	}
 }
