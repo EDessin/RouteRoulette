@@ -48,7 +48,7 @@ func (p Planner) Generate(r *http.Request, req GenerateRouteRequest) (RouteRespo
 }
 
 func (p Planner) bestCandidate(r *http.Request, req GenerateRouteRequest, targetM float64, seed int64) (CandidateRoute, error) {
-	const attempts = 40
+	const attempts = 100
 
 	lengthMultipliers := []float64{1.03, 1.06, 1.1, 1.15, 1.22, 1.3, 1.4, 1.55, 1.7, 1.9}
 
