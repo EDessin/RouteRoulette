@@ -36,6 +36,38 @@
   font-weight: 800;
 }
 
+.history-panel {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.875rem;
+  border: 1px solid #d9e2db;
+  border-radius: 8px;
+  background: #f7faf8;
+}
+
+.history-panel > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.history-panel span {
+  color: #617066;
+  font-size: 0.85rem;
+}
+
+.history-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.history-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+}
+
 h1 {
   margin: 0;
   font-size: 1.5rem;
@@ -62,9 +94,29 @@ p {
 
 .field p-inputnumber,
 .field ::ng-deep .p-inputnumber,
+.field ::ng-deep .p-selectbutton,
 .field ::ng-deep .p-inputtext,
 .field .p-inputtext {
   width: 100%;
+}
+
+.field ::ng-deep .p-inputtext,
+.field .p-inputtext,
+.field ::ng-deep .p-inputnumber-input {
+  background: #ffffff;
+  color: #17201b;
+  border-color: #cfdad3;
+}
+
+.field ::ng-deep .p-inputtext:enabled:focus,
+.field .p-inputtext:enabled:focus,
+.field ::ng-deep .p-inputnumber-input:enabled:focus {
+  border-color: #16a34a;
+  box-shadow: 0 0 0 0.15rem rgba(22, 163, 74, 0.18);
+}
+
+.field ::ng-deep .p-togglebutton {
+  flex: 1 1 0;
 }
 
 .slider-field {
@@ -116,6 +168,10 @@ p {
 
 .summary strong {
   font-size: 1.2rem;
+}
+
+.export-button {
+  width: 100%;
 }
 
 .warnings {

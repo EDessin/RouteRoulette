@@ -1,4 +1,4 @@
-import { AfterViewInit, Component, ElementRef, OnDestroy, ViewChild } from '@angular/core';
+import { AfterViewInit, Component, ElementRef, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpErrorResponse } from '@angular/common/http';
@@ -9,9 +9,10 @@ import { InputNumberModule } from 'primeng/inputnumber';
 import { InputTextModule } from 'primeng/inputtext';
 import { MessageModule } from 'primeng/message';
 import { ProgressSpinnerModule } from 'primeng/progressspinner';
+import { SelectButtonModule } from 'primeng/selectbutton';
 import { SliderModule } from 'primeng/slider';
 import { TagModule } from 'primeng/tag';
-import { Coordinate, RouteApiService, RouteResponse } from './route-api.service';
+import { Coordinate, HistoryStatus, RouteApiService, RouteResponse } from './route-api.service';
 
 @Component({
   selector: 'app-root',
@@ -25,13 +26,14 @@ import { Coordinate, RouteApiService, RouteResponse } from './route-api.service'
     InputTextModule,
     MessageModule,
     ProgressSpinnerModule,
+    SelectButtonModule,
     SliderModule,
     TagModule,
   ],
   templateUrl: './app.component.html',
   styleUrl: './app.component.css',
 })
-export class AppComponent implements AfterViewInit, OnDestroy {
+export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
   @ViewChild('map', { static: true }) private readonly mapElement!: ElementRef<HTMLDivElement>;
 
   homeAddress = 'Bossepleinstraat 121, 3130 Betekom';
@@ -41,25 +43,40 @@ export class AppComponent implements AfterViewInit, OnDestroy {
   estimatedPaceMinPerKm = 6;
   preferPaved = true;
   minPavedPercent = 70;
+  preferUnrunRoads = true;
+  surfacePolicy: 'strict' | 'assume_paved' = 'assume_paved';
+  surfacePolicyOptions = [
+    { label: 'Assume normal roads paved', value: 'assume_paved' },
+    { label: 'Strict OSM tags', value: 'strict' },
+  ];
 
   route?: RouteResponse;
+  historyStatus?: HistoryStatus;
   errorMessage = '';
+  historyMessage = '';
   isGenerating = false;
+  isSyncingHistory = false;
 
   private homeLat = 50.9950381;
   private homeLon = 4.7699273;
   private map?: L.Map;
+  private routeRenderer?: L.Renderer;
   private routeLayer?: L.Polyline;
   private homeMarker?: L.CircleMarker;
   private startMarker?: L.CircleMarker;
 
   constructor(private readonly routeApi: RouteApiService) {}
 
+  ngOnInit(): void {
+    this.loadHistoryStatus();
+  }
+
   ngAfterViewInit(): void {
     this.map = L.map(this.mapElement.nativeElement, {
       zoomControl: false,
       scrollWheelZoom: true,
     }).setView([this.homeLat, this.homeLon], 13);
+    this.routeRenderer = L.svg({ padding: 1.5 });
 
     L.control.zoom({ position: 'bottomright' }).addTo(this.map);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -72,6 +89,56 @@ export class AppComponent implements AfterViewInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.map?.remove();
+  }
+
+  exportRouteAsGpx(): void {
+    if (!this.route) {
+      return;
+    }
+
+    const gpx = this.routeToGpx(this.route);
+    const blob = new Blob([gpx], { type: 'application/gpx+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = this.gpxFilename(this.route);
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  connectStrava(): void {
+    window.location.href = '/api/strava/connect';
+  }
+
+  syncHistory(): void {
+    this.historyMessage = '';
+    this.errorMessage = '';
+    this.isSyncingHistory = true;
+    this.routeApi.syncStravaHistory().subscribe({
+      next: (result) => {
+        this.isSyncingHistory = false;
+        this.historyMessage = `${result.syncedActivities} new runs synced. ${result.skippedActivities} already up to date.`;
+        this.loadHistoryStatus();
+      },
+      error: (err: HttpErrorResponse) => {
+        this.isSyncingHistory = false;
+        this.errorMessage = this.errorText(err);
+      },
+    });
+  }
+
+  clearHistory(): void {
+    this.historyMessage = '';
+    this.errorMessage = '';
+    this.routeApi.clearHistory().subscribe({
+      next: () => {
+        this.historyMessage = 'Run history cleared.';
+        this.loadHistoryStatus();
+      },
+      error: (err: HttpErrorResponse) => {
+        this.errorMessage = this.errorText(err);
+      },
+    });
   }
 
   generateRoute(): void {
@@ -123,6 +190,8 @@ export class AppComponent implements AfterViewInit, OnDestroy {
         estimatedPaceMinPerKm: this.estimatedPaceMinPerKm,
         preferPaved: this.preferPaved,
         minPavedPercent: this.minPavedPercent,
+        surfacePolicy: this.surfacePolicy,
+        preferUnrunRoads: this.preferUnrunRoads,
         seed: Date.now(),
       })
       .subscribe({
@@ -143,6 +212,17 @@ export class AppComponent implements AfterViewInit, OnDestroy {
       lat: this.homeLat,
       lon: this.homeLon,
     };
+  }
+
+  private loadHistoryStatus(): void {
+    this.routeApi.getHistoryStatus().subscribe({
+      next: (status) => {
+        this.historyStatus = status;
+      },
+      error: () => {
+        this.historyStatus = undefined;
+      },
+    });
   }
 
   private drawHomeMarker(): void {
@@ -177,6 +257,7 @@ export class AppComponent implements AfterViewInit, OnDestroy {
       weight: 5,
       opacity: 0.95,
       lineJoin: 'round',
+      renderer: this.routeRenderer,
     }).addTo(this.map);
 
     this.startMarker = L.circleMarker([route.start.lat, route.start.lon], {
@@ -192,6 +273,56 @@ export class AppComponent implements AfterViewInit, OnDestroy {
     this.map.fitBounds(this.routeLayer.getBounds(), {
       padding: [32, 32],
       maxZoom: 15,
+    });
+  }
+
+  private routeToGpx(route: RouteResponse): string {
+    const routeName = `RouteRoulette ${route.distanceKm} km`;
+    const trackPoints = route.geometry.coordinates
+      .map(([lon, lat]) => `      <trkpt lat="${this.gpxCoordinate(lat)}" lon="${this.gpxCoordinate(lon)}"></trkpt>`)
+      .join('\n');
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="RouteRoulette" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>${this.escapeXml(routeName)}</name>
+    <desc>${this.escapeXml(`${this.resolvedHomeLabel} - ${route.distanceKm} km`)}</desc>
+  </metadata>
+  <trk>
+    <name>${this.escapeXml(routeName)}</name>
+    <trkseg>
+${trackPoints}
+    </trkseg>
+  </trk>
+</gpx>
+`;
+  }
+
+  private gpxFilename(route: RouteResponse): string {
+    const distance = String(route.distanceKm).replace('.', 'p');
+    return `routeroulette-${distance}km-${route.routeId}.gpx`;
+  }
+
+  private gpxCoordinate(value: number): string {
+    return value.toFixed(7);
+  }
+
+  private escapeXml(value: string): string {
+    return value.replace(/[<>&'"]/g, (char) => {
+      switch (char) {
+        case '<':
+          return '&lt;';
+        case '>':
+          return '&gt;';
+        case '&':
+          return '&amp;';
+        case "'":
+          return '&apos;';
+        case '"':
+          return '&quot;';
+        default:
+          return char;
+      }
     });
   }
 

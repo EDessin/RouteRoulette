@@ -5,6 +5,8 @@ backend/bin/
 backend/tmp/
 backend/data/osm/*
 !backend/data/osm/.gitkeep
+backend/data/history/*
+!backend/data/history/.gitkeep
 
 # Angular / Node
 frontend/.angular/

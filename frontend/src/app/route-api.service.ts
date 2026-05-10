@@ -14,7 +14,23 @@ export interface GenerateRouteRequest {
   estimatedPaceMinPerKm?: number;
   preferPaved: boolean;
   minPavedPercent: number;
+  surfacePolicy?: 'strict' | 'assume_paved';
+  preferUnrunRoads: boolean;
   seed?: number;
+}
+
+export interface HistoryStatus {
+  connected: boolean;
+  syncedActivities: number;
+  lastSyncAt?: string;
+  newestActivityStartDate?: string;
+}
+
+export interface HistorySyncResult {
+  fetchedActivities: number;
+  skippedActivities: number;
+  syncedActivities: number;
+  lastSyncAt?: string;
 }
 
 export interface GeocodeRequest {
@@ -40,6 +56,8 @@ export interface RouteResponse {
   pavedPercent?: number;
   unpavedPercent?: number;
   unknownSurfacePercent?: number;
+  unrunPercent?: number;
+  previouslyRunPercent?: number;
   provider: string;
   warnings?: string[];
 }
@@ -54,5 +72,17 @@ export class RouteApiService {
 
   generateRoute(request: GenerateRouteRequest): Observable<RouteResponse> {
     return this.http.post<RouteResponse>('/api/routes/generate', request);
+  }
+
+  getHistoryStatus(): Observable<HistoryStatus> {
+    return this.http.get<HistoryStatus>('/api/history/status');
+  }
+
+  syncStravaHistory(): Observable<HistorySyncResult> {
+    return this.http.post<HistorySyncResult>('/api/strava/sync', {});
+  }
+
+  clearHistory(): Observable<{ status: string }> {
+    return this.http.delete<{ status: string }>('/api/history');
   }
 }

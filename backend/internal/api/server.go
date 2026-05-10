@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/EDessin/RouteRoulette/backend/internal/config"
+	"github.com/EDessin/RouteRoulette/backend/internal/history"
 	"github.com/EDessin/RouteRoulette/backend/internal/planner"
+	"github.com/EDessin/RouteRoulette/backend/internal/strava"
 )
 
 type RoutePlanner interface {
@@ -20,16 +22,20 @@ type Geocoder interface {
 }
 
 type Server struct {
-	cfg      config.Config
-	planner  RoutePlanner
-	geocoder Geocoder
+	cfg          config.Config
+	planner      RoutePlanner
+	geocoder     Geocoder
+	stravaClient strava.Client
+	historyStore *history.Store
 }
 
-func NewServer(cfg config.Config, routePlanner RoutePlanner, geocoder Geocoder) Server {
+func NewServer(cfg config.Config, routePlanner RoutePlanner, geocoder Geocoder, stravaClient strava.Client, historyStore *history.Store) Server {
 	return Server{
-		cfg:      cfg,
-		planner:  routePlanner,
-		geocoder: geocoder,
+		cfg:          cfg,
+		planner:      routePlanner,
+		geocoder:     geocoder,
+		stravaClient: stravaClient,
+		historyStore: historyStore,
 	}
 }
 
@@ -38,6 +44,11 @@ func (s Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("POST /api/geocode", s.handleGeocode)
 	mux.HandleFunc("POST /api/routes/generate", s.handleGenerateRoute)
+	mux.HandleFunc("GET /api/strava/connect", s.handleStravaConnect)
+	mux.HandleFunc("GET /api/strava/callback", s.handleStravaCallback)
+	mux.HandleFunc("POST /api/strava/sync", s.handleStravaSync)
+	mux.HandleFunc("GET /api/history/status", s.handleHistoryStatus)
+	mux.HandleFunc("DELETE /api/history", s.handleHistoryDelete)
 
 	return s.withCORS(mux)
 }
@@ -98,6 +109,55 @@ func (s Server) handleGenerateRoute(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, route)
 }
 
+func (s Server) handleStravaConnect(w http.ResponseWriter, r *http.Request) {
+	authURL, err := s.stravaClient.AuthorizationURL()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	http.Redirect(w, r, authURL, http.StatusFound)
+}
+
+func (s Server) handleStravaCallback(w http.ResponseWriter, r *http.Request) {
+	if errText := strings.TrimSpace(r.URL.Query().Get("error")); errText != "" {
+		writeError(w, http.StatusBadRequest, "Strava authorization failed: "+errText)
+		return
+	}
+	if _, err := s.stravaClient.ExchangeCode(r.Context(), r.URL.Query().Get("code")); err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("<!doctype html><title>RouteRoulette</title><p>Strava connected. You can close this tab and return to RouteRoulette.</p>"))
+}
+
+func (s Server) handleStravaSync(w http.ResponseWriter, r *http.Request) {
+	result, err := history.SyncStrava(r.Context(), s.stravaClient, s.historyStore)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s Server) handleHistoryStatus(w http.ResponseWriter, _ *http.Request) {
+	status, err := s.historyStore.Status(s.stravaClient.Connected())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
+func (s Server) handleHistoryDelete(w http.ResponseWriter, _ *http.Request) {
+	if err := s.historyStore.Clear(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
 func (s Server) withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := s.cfg.CORSAllowedOrigin
@@ -106,7 +166,7 @@ func (s Server) withCORS(next http.Handler) http.Handler {
 		}
 
 		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
 		if r.Method == http.MethodOptions {

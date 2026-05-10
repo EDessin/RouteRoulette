@@ -4,9 +4,41 @@
       <span class="brand-mark">RR</span>
       <div>
         <h1>RouteRoulette</h1>
-        <p>Fresh circular running routes near home.</p>
+        <p>Spin the map. Run the unknown.</p>
       </div>
     </div>
+
+    <section class="history-panel" aria-label="Strava history">
+      <div>
+        <strong>Strava history</strong>
+        <span>
+          @if (historyStatus?.connected) {
+            Connected
+          } @else {
+            Not connected
+          }
+        </span>
+      </div>
+      <div class="history-actions">
+        <button pButton type="button" icon="pi pi-link" label="Connect" severity="secondary" (click)="connectStrava()"></button>
+        <button
+          pButton
+          type="button"
+          icon="pi pi-refresh"
+          label="Sync"
+          severity="secondary"
+          [loading]="isSyncingHistory"
+          [disabled]="!historyStatus?.connected"
+          (click)="syncHistory()"
+        ></button>
+      </div>
+      <div class="history-meta">
+        <span>{{ historyStatus?.syncedActivities || 0 }} runs synced</span>
+        @if (historyStatus?.lastSyncAt) {
+          <span>Last sync {{ historyStatus?.lastSyncAt | date: 'short' }}</span>
+        }
+      </div>
+    </section>
 
     <form class="route-form" (ngSubmit)="generateRoute()">
       <label class="field">
@@ -71,6 +103,28 @@
         <span>Paved roads only</span>
       </label>
 
+      <label class="check-row">
+        <p-checkbox
+          [(ngModel)]="preferUnrunRoads"
+          name="preferUnrunRoads"
+          [binary]="true"
+          inputId="preferUnrunRoads"
+        />
+        <span>Prefer unrun roads</span>
+      </label>
+
+      <label class="field">
+        <span>Surface data</span>
+        <p-selectbutton
+          [(ngModel)]="surfacePolicy"
+          name="surfacePolicy"
+          [options]="surfacePolicyOptions"
+          optionLabel="label"
+          optionValue="value"
+          [allowEmpty]="false"
+        />
+      </label>
+
       <label class="field">
         <span>Minimum paved</span>
         <p-inputnumber
@@ -96,6 +150,10 @@
 
     @if (errorMessage) {
       <p-message severity="error" [text]="errorMessage" />
+    }
+
+    @if (historyMessage) {
+      <p-message severity="success" [text]="historyMessage" />
     }
 
     @if (route) {
@@ -130,8 +188,29 @@
             <strong>{{ route.unknownSurfacePercent | number: '1.0-0' }}%</strong>
           </div>
         }
+        @if (route.unrunPercent !== undefined) {
+          <div>
+            <span>Unrun</span>
+            <strong>{{ route.unrunPercent | number: '1.0-0' }}%</strong>
+          </div>
+        }
+        @if (route.previouslyRunPercent !== undefined) {
+          <div>
+            <span>Run before</span>
+            <strong>{{ route.previouslyRunPercent | number: '1.0-0' }}%</strong>
+          </div>
+        }
         <p-tag [value]="route.provider" severity="secondary" />
       </section>
+      <button
+        pButton
+        type="button"
+        class="export-button"
+        icon="pi pi-download"
+        label="Export GPX"
+        severity="secondary"
+        (click)="exportRouteAsGpx()"
+      ></button>
     }
 
     @if (route && route.warnings && route.warnings.length > 0) {

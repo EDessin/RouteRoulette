@@ -7,14 +7,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/EDessin/RouteRoulette/backend/internal/history"
 	"github.com/EDessin/RouteRoulette/backend/internal/planner"
 	"github.com/paulmach/osm"
 	"github.com/paulmach/osm/osmpbf"
@@ -24,7 +27,16 @@ const (
 	SurfacePaved = iota
 	SurfaceUnpaved
 	SurfaceUnknown
+
+	SurfacePolicyStrict      = "strict"
+	SurfacePolicyAssumePaved = "assume_paved"
+
+	routeGenerationBudget   = 10 * time.Second
+	recentRoadPenaltyWeight = 3
+	sharedHomeConnectorM    = 200
 )
+
+var errRouteSearchTimedOut = errors.New("route search timed out")
 
 type Config struct {
 	DataDir       string
@@ -32,11 +44,31 @@ type Config struct {
 	ExtractURL    string
 	RadiusKm      float64
 	AllowDownload bool
+	HistoryStore  *history.Store
 }
 
 type Provider struct {
 	cfg    Config
 	client *http.Client
+	cache  *graphMemoryCache
+}
+
+type graphMemoryCache struct {
+	mu           sync.Mutex
+	graphs       map[string]*Graph
+	historyEdges map[string]cachedHistoryEdges
+}
+
+type cachedHistoryEdges struct {
+	LastSyncAt       string
+	SyncedActivities int
+	Overlay          historyOverlay
+}
+
+type historyOverlay struct {
+	AllEdges         map[edgeKey]struct{}
+	RecentEdges      map[edgeKey]struct{}
+	RecentActivities int
 }
 
 func NewProvider(cfg Config) Provider {
@@ -50,7 +82,7 @@ func NewProvider(cfg Config) Provider {
 		cfg.ExtractURL = "https://download.geofabrik.de/europe/belgium-latest.osm.pbf"
 	}
 	if cfg.RadiusKm <= 0 {
-		cfg.RadiusKm = 50
+		cfg.RadiusKm = 20
 	}
 
 	return Provider{
@@ -58,25 +90,97 @@ func NewProvider(cfg Config) Provider {
 		client: &http.Client{
 			Timeout: 20 * time.Minute,
 		},
+		cache: &graphMemoryCache{
+			graphs:       make(map[string]*Graph),
+			historyEdges: make(map[string]cachedHistoryEdges),
+		},
 	}
 }
 
 func (p Provider) GenerateRoundTrip(ctxReq *http.Request, req planner.CandidateRequest) (planner.CandidateRoute, error) {
+	started := time.Now()
+	graphLoadStarted := time.Now()
 	graph, err := p.loadGraph(ctxReq.Context(), req.Home)
 	if err != nil {
 		return planner.CandidateRoute{}, err
 	}
+	graphLoadDuration := time.Since(graphLoadStarted)
 
-	route, err := graph.GenerateLoop(req)
+	subgraphStarted := time.Now()
+	pavedOnly := pavedOnly(req)
+	policy := surfacePolicy(req)
+	routeGraph, subgraphRadiusKm, err := graph.routeSubgraph(req.Start, req.TargetDistanceM, pavedOnly, policy)
 	if err != nil {
 		return planner.CandidateRoute{}, err
 	}
+	subgraphDuration := time.Since(subgraphStarted)
+
+	routeHistory := emptyHistoryOverlay()
+	historyDuration := time.Duration(0)
+	if req.PreferUnrunRoads && p.cfg.HistoryStore != nil {
+		historyStarted := time.Now()
+		routeHistory, err = p.loadHistoryEdges(routeGraph, p.historyCacheKey(req, subgraphRadiusKm, pavedOnly, policy))
+		if err != nil {
+			return planner.CandidateRoute{}, err
+		}
+		historyDuration = time.Since(historyStarted)
+	}
+
+	loopStarted := time.Now()
+	route, err := routeGraph.GenerateLoop(req, routeHistory)
+	if err != nil {
+		log.Printf("local-osm route failed: total=%s graph_load=%s subgraph=%s history=%s loop=%s full_nodes=%d full_directed_edges=%d route_nodes=%d route_directed_edges=%d subgraph_radius_km=%.1f route_history_edges=%d recent_history_edges=%d recent_activities=%d err=%v",
+			time.Since(started).Round(time.Millisecond),
+			graphLoadDuration.Round(time.Millisecond),
+			subgraphDuration.Round(time.Millisecond),
+			historyDuration.Round(time.Millisecond),
+			time.Since(loopStarted).Round(time.Millisecond),
+			len(graph.Nodes),
+			graph.directedEdgeCount(),
+			len(routeGraph.Nodes),
+			routeGraph.directedEdgeCount(),
+			subgraphRadiusKm,
+			len(routeHistory.AllEdges),
+			len(routeHistory.RecentEdges),
+			routeHistory.RecentActivities,
+			err,
+		)
+		return planner.CandidateRoute{}, err
+	}
+	log.Printf("local-osm route generated: total=%s graph_load=%s subgraph=%s history=%s loop=%s full_nodes=%d full_directed_edges=%d route_nodes=%d route_directed_edges=%d subgraph_radius_km=%.1f route_history_edges=%d recent_history_edges=%d recent_activities=%d distance_km=%.2f",
+		time.Since(started).Round(time.Millisecond),
+		graphLoadDuration.Round(time.Millisecond),
+		subgraphDuration.Round(time.Millisecond),
+		historyDuration.Round(time.Millisecond),
+		time.Since(loopStarted).Round(time.Millisecond),
+		len(graph.Nodes),
+		graph.directedEdgeCount(),
+		len(routeGraph.Nodes),
+		routeGraph.directedEdgeCount(),
+		subgraphRadiusKm,
+		len(routeHistory.AllEdges),
+		len(routeHistory.RecentEdges),
+		routeHistory.RecentActivities,
+		route.DistanceM/1000,
+	)
 	return route, nil
+}
+
+func (p Provider) PlannerAttempts() int {
+	return 1
 }
 
 func (p Provider) loadGraph(ctx context.Context, home planner.Coordinate) (*Graph, error) {
 	cachePath := p.graphCachePath(home)
+	p.cache.mu.Lock()
+	defer p.cache.mu.Unlock()
+
+	if graph := p.cache.graphs[cachePath]; graph != nil {
+		return graph, nil
+	}
+
 	if graph, err := loadGraphCache(cachePath); err == nil {
+		p.cache.graphs[cachePath] = graph
 		return graph, nil
 	}
 
@@ -95,7 +199,49 @@ func (p Provider) loadGraph(ctx context.Context, home planner.Coordinate) (*Grap
 	if err := saveGraphCache(cachePath, graph); err != nil {
 		return nil, err
 	}
+	p.cache.graphs[cachePath] = graph
 	return graph, nil
+}
+
+func (p Provider) loadHistoryEdges(graph *Graph, cacheKey string) (historyOverlay, error) {
+	status, err := p.cfg.HistoryStore.Status(false)
+	if err != nil {
+		return historyOverlay{}, err
+	}
+
+	p.cache.mu.Lock()
+	cached := p.cache.historyEdges[cacheKey]
+	if cached.Overlay.AllEdges != nil && cached.LastSyncAt == status.LastSyncAt && cached.SyncedActivities == status.SyncedActivities {
+		p.cache.mu.Unlock()
+		return cached.Overlay, nil
+	}
+	p.cache.mu.Unlock()
+
+	overlay, err := graph.historyEdges(p.cfg.HistoryStore)
+	if err != nil {
+		return historyOverlay{}, err
+	}
+
+	p.cache.mu.Lock()
+	p.cache.historyEdges[cacheKey] = cachedHistoryEdges{
+		LastSyncAt:       status.LastSyncAt,
+		SyncedActivities: status.SyncedActivities,
+		Overlay:          overlay,
+	}
+	p.cache.mu.Unlock()
+	return overlay, nil
+}
+
+func (p Provider) historyCacheKey(req planner.CandidateRequest, subgraphRadiusKm float64, pavedOnly bool, surfacePolicy string) string {
+	return fmt.Sprintf("%s|start=%.5f,%.5f|target=%.0fm|radius=%.1fkm|paved=%t|surface=%s",
+		p.graphCachePath(req.Home),
+		req.Start.Lat,
+		req.Start.Lon,
+		req.TargetDistanceM,
+		subgraphRadiusKm,
+		pavedOnly,
+		surfacePolicy,
+	)
 }
 
 func (p Provider) ensureExtract(ctx context.Context) error {
@@ -303,6 +449,80 @@ func (g *Graph) nodeIndex(id osm.NodeID, coord osmCoord, indexByOSMID map[osm.No
 	return idx
 }
 
+func (g *Graph) directedEdgeCount() int {
+	total := 0
+	for _, edges := range g.Edges {
+		total += len(edges)
+	}
+	return total
+}
+
+func (g *Graph) routeSubgraph(start planner.Coordinate, targetM float64, pavedOnly bool, surfacePolicy string) (*Graph, float64, error) {
+	radiusKm := routeSubgraphRadiusKm(targetM, g.RadiusKm)
+	if len(g.Nodes) == 0 {
+		return nil, radiusKm, errors.New("local graph is empty")
+	}
+
+	include := make([]bool, len(g.Nodes))
+	for idx, node := range g.Nodes {
+		include[idx] = distanceKm(start, planner.Coordinate{Lat: node.Lat, Lon: node.Lon}) <= radiusKm
+	}
+
+	oldToNew := make([]int, len(g.Nodes))
+	for idx := range oldToNew {
+		oldToNew[idx] = -1
+	}
+	subgraph := &Graph{
+		Home:      start,
+		RadiusKm:  radiusKm,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+
+	for oldFrom, edges := range g.Edges {
+		if !include[oldFrom] {
+			continue
+		}
+		for _, edge := range edges {
+			if !include[edge.To] || !usableSurface(edge.Surface, pavedOnly, surfacePolicy) {
+				continue
+			}
+			newFrom := subgraph.nodeFromOldIndex(g, oldFrom, oldToNew)
+			newTo := subgraph.nodeFromOldIndex(g, edge.To, oldToNew)
+			subgraph.Edges[newFrom] = append(subgraph.Edges[newFrom], GraphEdge{
+				To:       newTo,
+				Distance: edge.Distance,
+				Surface:  edge.Surface,
+			})
+		}
+	}
+
+	if len(subgraph.Nodes) == 0 {
+		return nil, radiusKm, fmt.Errorf("no usable roads found within %.1f km of the selected start", radiusKm)
+	}
+	return subgraph, radiusKm, nil
+}
+
+func (g *Graph) nodeFromOldIndex(source *Graph, oldIdx int, oldToNew []int) int {
+	if oldToNew[oldIdx] >= 0 {
+		return oldToNew[oldIdx]
+	}
+	newIdx := len(g.Nodes)
+	oldToNew[oldIdx] = newIdx
+	g.Nodes = append(g.Nodes, source.Nodes[oldIdx])
+	g.Edges = append(g.Edges, nil)
+	return newIdx
+}
+
+func routeSubgraphRadiusKm(targetM float64, graphRadiusKm float64) float64 {
+	if graphRadiusKm <= 0 {
+		graphRadiusKm = 20
+	}
+	radiusKm := targetM/2000 + 3
+	radiusKm = math.Max(4, radiusKm)
+	radiusKm = math.Min(10, radiusKm)
+	return math.Min(graphRadiusKm, radiusKm)
+}
+
 func isRunnableWay(tags map[string]string) bool {
 	highway := tags["highway"]
 	if highway == "" {
@@ -341,11 +561,14 @@ func classifySurface(tags map[string]string) int {
 	}
 }
 
-func (g *Graph) GenerateLoop(req planner.CandidateRequest) (planner.CandidateRoute, error) {
+func (g *Graph) GenerateLoop(req planner.CandidateRequest, history historyOverlay) (planner.CandidateRoute, error) {
+	started := time.Now()
 	if len(g.Nodes) == 0 {
 		return planner.CandidateRoute{}, errors.New("local graph is empty")
 	}
+	startLookupStarted := time.Now()
 	start := g.nearestNode(req.Start)
+	startLookupDuration := time.Since(startLookupStarted)
 	if start < 0 {
 		return planner.CandidateRoute{}, errors.New("no start node found in local graph")
 	}
@@ -353,15 +576,37 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest) (planner.CandidateRou
 	rng := rand.New(rand.NewSource(req.Seed))
 	best := localCandidate{}
 	bestScore := math.MaxFloat64
-	attempts := 40
-	nearestCache := make(map[projectionKey]int)
+	attempts := routeCandidateAttempts(req.TargetDistanceM)
+	pavedOnly := pavedOnly(req)
+	policy := surfacePolicy(req)
+	waypointStarted := time.Now()
+	waypoints := g.newWaypointSet(start, req.TargetDistanceM, pavedOnly, policy)
+	waypointDuration := time.Since(waypointStarted)
+	if len(waypoints.Nodes) == 0 {
+		return planner.CandidateRoute{}, errors.New("no usable local OSM waypoint nodes found near start")
+	}
 	search := g.newSearchWorkspace()
+	stats := &routeSearchStats{}
+	search.Stats = stats
+	deadline := started.Add(routeGenerationBudget)
+	search.Deadline = deadline
+	successes := 0
 	for i := 0; i < attempts; i++ {
-		candidate, err := g.loopCandidate(start, req.TargetDistanceM, req.MinPavedPercent, pavedOnly(req), rng, nearestCache, search)
+		if i > 0 && time.Now().After(deadline) {
+			stats.TimedOut = true
+			break
+		}
+		candidate, err := g.loopCandidate(start, req.TargetDistanceM, req.MinPavedPercent, pavedOnly, policy, rng, waypoints, history, search)
 		if err != nil {
+			stats.CandidateFailures++
+			if errors.Is(err, errRouteSearchTimedOut) {
+				stats.TimedOut = true
+				break
+			}
 			continue
 		}
-		score := localScore(candidate, req.TargetDistanceM, req.MinPavedPercent)
+		successes++
+		score := localScore(candidate, req.TargetDistanceM, req.MinPavedPercent, req.PreferUnrunRoads)
 		if score < bestScore {
 			best = candidate
 			bestScore = score
@@ -371,12 +616,67 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest) (planner.CandidateRou
 		}
 	}
 	if len(best.Path) == 0 {
+		log.Printf("local-osm loop failed: total=%s start_lookup=%s waypoint_build=%s waypoints=%d attempts=%d successes=%d failures=%d timed_out=%t search_calls=%d settled=%d touched=%d stale_skips=%d closed_skips=%d bound_skips=%d cost_skips=%d max_queue=%d",
+			time.Since(started).Round(time.Millisecond),
+			startLookupDuration.Round(time.Millisecond),
+			waypointDuration.Round(time.Millisecond),
+			len(waypoints.Nodes),
+			attempts,
+			successes,
+			stats.CandidateFailures,
+			stats.TimedOut,
+			stats.SearchCalls,
+			stats.SettledNodes,
+			stats.TouchedNodes,
+			stats.StaleQueueSkips,
+			stats.ClosedQueueSkips,
+			stats.BoundSkips,
+			stats.CostSkips,
+			stats.MaxQueueLen,
+		)
 		return planner.CandidateRoute{}, errors.New("could not find a local OSM loop")
 	}
+	log.Printf("local-osm loop stats: total=%s start_lookup=%s waypoint_build=%s waypoints=%d attempts=%d successes=%d failures=%d timed_out=%t search_calls=%d settled=%d touched=%d stale_skips=%d closed_skips=%d bound_skips=%d cost_skips=%d max_queue=%d best_distance_km=%.2f paved=%.1f previously_run=%.1f recent_previously_run=%.1f",
+		time.Since(started).Round(time.Millisecond),
+		startLookupDuration.Round(time.Millisecond),
+		waypointDuration.Round(time.Millisecond),
+		len(waypoints.Nodes),
+		attempts,
+		successes,
+		stats.CandidateFailures,
+		stats.TimedOut,
+		stats.SearchCalls,
+		stats.SettledNodes,
+		stats.TouchedNodes,
+		stats.StaleQueueSkips,
+		stats.ClosedQueueSkips,
+		stats.BoundSkips,
+		stats.CostSkips,
+		stats.MaxQueueLen,
+		best.DistanceM/1000,
+		best.PavedPercent,
+		best.PreviouslyRunPercent,
+		best.RecentPreviouslyRunPercent,
+	)
 
-	paved := round(best.PavedPercent, 1)
+	paved := round(best.TaggedPavedPercent, 1)
 	unpaved := round(best.UnpavedPercent, 1)
 	unknown := round(best.UnknownPercent, 1)
+	var unrun *float64
+	var previouslyRun *float64
+	if req.PreferUnrunRoads {
+		unrunValue := round(best.UnrunPercent, 1)
+		previouslyRunValue := round(best.PreviouslyRunPercent, 1)
+		unrun = &unrunValue
+		previouslyRun = &previouslyRunValue
+	}
+	warnings := []string{}
+	if policy == SurfacePolicyAssumePaved && unknown > 0 {
+		warnings = append(warnings, fmt.Sprintf("%.0f%% of this route uses roads without OSM surface tags and treats them as paved because of the selected surface-data mode.", unknown))
+	}
+	if stats.TimedOut {
+		warnings = append(warnings, fmt.Sprintf("Route generation stopped after %.0f seconds and returned the best route found so far.", routeGenerationBudget.Seconds()))
+	}
 	coords := make([][]float64, 0, len(best.Path))
 	for _, idx := range best.Path {
 		node := g.Nodes[idx]
@@ -390,44 +690,186 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest) (planner.CandidateRou
 			Type:        "LineString",
 			Coordinates: coords,
 		},
-		PavedPercent:   &paved,
-		UnpavedPercent: &unpaved,
-		UnknownPercent: &unknown,
-		Provider:       "local-osm",
+		PavedPercent:         &paved,
+		UnpavedPercent:       &unpaved,
+		UnknownPercent:       &unknown,
+		UnrunPercent:         unrun,
+		PreviouslyRunPercent: previouslyRun,
+		Provider:             "local-osm",
+		Warnings:             warnings,
 	}, nil
 }
 
 type localCandidate struct {
-	Path           []int
-	DistanceM      float64
-	PavedPercent   float64
-	UnpavedPercent float64
-	UnknownPercent float64
+	Path                       []int
+	DistanceM                  float64
+	PavedPercent               float64
+	TaggedPavedPercent         float64
+	UnpavedPercent             float64
+	UnknownPercent             float64
+	UnrunPercent               float64
+	PreviouslyRunPercent       float64
+	RecentPreviouslyRunPercent float64
 }
 
 func pavedOnly(req planner.CandidateRequest) bool {
 	return req.PreferPaved || req.MinPavedPercent > 0
 }
 
-func (g *Graph) loopCandidate(start int, targetM float64, minPavedPercent float64, pavedOnly bool, rng *rand.Rand, nearestCache map[projectionKey]int, search *searchWorkspace) (localCandidate, error) {
+func surfacePolicy(req planner.CandidateRequest) string {
+	if req.SurfacePolicy == SurfacePolicyAssumePaved {
+		return SurfacePolicyAssumePaved
+	}
+	return SurfacePolicyStrict
+}
+
+type waypointSet struct {
+	Nodes []waypointNode
+}
+
+type waypointNode struct {
+	Index   int
+	Bearing float64
+	DistM   float64
+	Degree  int
+}
+
+func (g *Graph) newWaypointSet(start int, targetM float64, pavedOnly bool, surfacePolicy string) waypointSet {
+	inComponent := g.connectedComponent(start, pavedOnly, surfacePolicy)
+	loopRadiusM := math.Max(600, targetM/(2*math.Pi))
+	minDistM := math.Max(250, loopRadiusM*0.45)
+	maxDistM := math.Max(minDistM+250, loopRadiusM*1.75)
+	minDegree := 3
+	if targetM >= 12000 {
+		minDegree = 4
+	}
+	nodes := g.waypointNodes(start, inComponent, pavedOnly, surfacePolicy, minDistM, maxDistM, minDegree)
+	if len(nodes) == 0 && minDegree > 3 {
+		nodes = g.waypointNodes(start, inComponent, pavedOnly, surfacePolicy, minDistM, maxDistM, 3)
+	}
+	if len(nodes) == 0 {
+		nodes = g.waypointNodes(start, inComponent, pavedOnly, surfacePolicy, minDistM, maxDistM, 2)
+	}
+	if len(nodes) == 0 {
+		nodes = g.waypointNodes(start, inComponent, pavedOnly, surfacePolicy, minDistM*0.5, maxDistM*1.5, 1)
+	}
+	return waypointSet{Nodes: nodes}
+}
+
+func (g *Graph) waypointNodes(start int, inComponent []bool, pavedOnly bool, surfacePolicy string, minDistM float64, maxDistM float64, minDegree int) []waypointNode {
+	startNode := g.Nodes[start]
+	nodes := make([]waypointNode, 0)
+	for idx, node := range g.Nodes {
+		if idx == start || !inComponent[idx] {
+			continue
+		}
+		degree := g.usableDegree(idx, pavedOnly, surfacePolicy)
+		if degree < minDegree {
+			continue
+		}
+		distM := distanceM(startNode.Lat, startNode.Lon, node.Lat, node.Lon)
+		if distM < minDistM || distM > maxDistM {
+			continue
+		}
+		nodes = append(nodes, waypointNode{
+			Index:   idx,
+			Bearing: bearingRadians(startNode.Lat, startNode.Lon, node.Lat, node.Lon),
+			DistM:   distM,
+			Degree:  degree,
+		})
+	}
+	return nodes
+}
+
+func (g *Graph) connectedComponent(start int, pavedOnly bool, surfacePolicy string) []bool {
+	seen := make([]bool, len(g.Nodes))
+	queue := []int{start}
+	seen[start] = true
+	for len(queue) > 0 {
+		node := queue[0]
+		queue = queue[1:]
+		for _, edge := range g.Edges[node] {
+			if !usableSurface(edge.Surface, pavedOnly, surfacePolicy) {
+				continue
+			}
+			if !seen[edge.To] {
+				seen[edge.To] = true
+				queue = append(queue, edge.To)
+			}
+		}
+	}
+	return seen
+}
+
+func (g *Graph) usableDegree(node int, pavedOnly bool, surfacePolicy string) int {
+	neighbors := make(map[int]struct{})
+	for _, edge := range g.Edges[node] {
+		if !usableSurface(edge.Surface, pavedOnly, surfacePolicy) {
+			continue
+		}
+		neighbors[edge.To] = struct{}{}
+	}
+	return len(neighbors)
+}
+
+func (set waypointSet) pick(desiredBearing float64, desiredDistanceM float64, used map[int]struct{}, rng *rand.Rand) (int, error) {
+	if len(set.Nodes) == 0 {
+		return -1, errors.New("waypoint set is empty")
+	}
+	bestIdx := -1
+	bestScore := math.MaxFloat64
+	for i, node := range set.Nodes {
+		if _, ok := used[node.Index]; ok {
+			continue
+		}
+		bearingPenalty := angularDifference(node.Bearing, desiredBearing) / math.Pi
+		distancePenalty := math.Abs(node.DistM-desiredDistanceM) / math.Max(1, desiredDistanceM)
+		degreeBonus := math.Min(float64(node.Degree-1), 4) * 0.04
+		randomJitter := rng.Float64() * 0.08
+		score := bearingPenalty*2 + distancePenalty - degreeBonus + randomJitter
+		if score < bestScore {
+			bestScore = score
+			bestIdx = i
+		}
+	}
+	if bestIdx < 0 {
+		return -1, errors.New("no unused waypoint nodes available")
+	}
+	return set.Nodes[bestIdx].Index, nil
+}
+
+func (g *Graph) loopCandidate(start int, targetM float64, minPavedPercent float64, pavedOnly bool, surfacePolicy string, rng *rand.Rand, waypointSet waypointSet, history historyOverlay, search *searchWorkspace) (localCandidate, error) {
 	radiusM := math.Max(600, targetM/(2*math.Pi))
 	baseBearing := rng.Float64() * 2 * math.Pi
-	waypoints := make([]int, 0, 3)
-	for i := 0; i < 3; i++ {
-		bearing := baseBearing + float64(i)*2*math.Pi/3
+	waypointCount := waypointCountForTarget(targetM, rng)
+	waypoints := make([]int, 0, waypointCount)
+	usedWaypoints := map[int]struct{}{start: {}}
+	for i := 0; i < waypointCount; i++ {
+		bearing := baseBearing + float64(i)*2*math.Pi/float64(waypointCount)
 		distance := radiusM * (0.75 + rng.Float64()*0.75)
-		waypoints = append(waypoints, g.nodeNearProjection(start, bearing, distance, nearestCache))
-	}
-	points := append([]int{start}, waypoints...)
-	points = append(points, start)
-
-	fullPath := []int{}
-	var edges []GraphEdge
-	for i := 1; i < len(points); i++ {
-		path, pathEdges, err := g.shortestPath(points[i-1], points[i], minPavedPercent, pavedOnly, search)
+		waypoint, err := waypointSet.pick(normalizeBearing(bearing), distance, usedWaypoints, rng)
 		if err != nil {
 			return localCandidate{}, err
 		}
+		waypoints = append(waypoints, waypoint)
+		usedWaypoints[waypoint] = struct{}{}
+	}
+	points := append([]int{start}, waypoints...)
+	points = append(points, start)
+	bounds := g.newRouteSearchBounds(points, targetM, minPavedPercent, pavedOnly, surfacePolicy)
+
+	fullPath := []int{}
+	var edges []GraphEdge
+	usedEdges := make(map[edgeKey]struct{})
+	sharedConnectorEdges := make(map[edgeKey]struct{})
+	for i := 1; i < len(points); i++ {
+		search.Bounds = bounds
+		path, pathEdges, err := g.shortestPath(points[i-1], points[i], minPavedPercent, pavedOnly, surfacePolicy, usedEdges, history.RecentEdges, search)
+		if err != nil {
+			return localCandidate{}, err
+		}
+		g.addHomeConnectorEdgesNearStart(sharedConnectorEdges, start, path, sharedHomeConnectorM)
+		addBlockedPathEdgesExcept(usedEdges, path, sharedConnectorEdges)
 		if i > 1 && len(path) > 0 {
 			path = path[1:]
 		}
@@ -438,32 +880,114 @@ func (g *Graph) loopCandidate(start int, targetM float64, minPavedPercent float6
 		return localCandidate{}, errors.New("route path is too short")
 	}
 
-	total, paved, unpaved, unknown := edgeStats(edges)
+	total, taggedPaved, unpaved, unknown := edgeStats(edges)
 	if total == 0 {
 		return localCandidate{}, errors.New("route has zero distance")
 	}
-	if hasRepeatedEdges(fullPath) {
+	if total < targetM || total > targetM+500 {
+		return localCandidate{}, errors.New("route is outside requested distance bounds")
+	}
+	if hasRepeatedEdgesExcept(fullPath, sharedConnectorEdges) {
 		return localCandidate{}, errors.New("route repeats a road segment")
 	}
+	effectivePaved := taggedPaved
+	if surfacePolicy == SurfacePolicyAssumePaved {
+		effectivePaved += unknown
+	}
+	previouslyRun := historyDistance(fullPath, edges, history.AllEdges)
+	recentlyRun := historyDistance(fullPath, edges, history.RecentEdges)
 	return localCandidate{
-		Path:           fullPath,
-		DistanceM:      total,
-		PavedPercent:   paved / total * 100,
-		UnpavedPercent: unpaved / total * 100,
-		UnknownPercent: unknown / total * 100,
+		Path:                       fullPath,
+		DistanceM:                  total,
+		PavedPercent:               effectivePaved / total * 100,
+		TaggedPavedPercent:         taggedPaved / total * 100,
+		UnpavedPercent:             unpaved / total * 100,
+		UnknownPercent:             unknown / total * 100,
+		UnrunPercent:               math.Max(0, total-previouslyRun) / total * 100,
+		PreviouslyRunPercent:       previouslyRun / total * 100,
+		RecentPreviouslyRunPercent: recentlyRun / total * 100,
 	}, nil
 }
 
+func waypointCountForTarget(targetM float64, rng *rand.Rand) int {
+	if targetM < 12000 {
+		return 3
+	}
+	base := int(math.Round(targetM / 3000))
+	minCount := maxInt(5, minInt(base, 8))
+	maxCount := 8
+	if minCount >= maxCount {
+		return maxCount
+	}
+	return minCount + rng.Intn(maxCount-minCount+1)
+}
+
+func routeCandidateAttempts(targetM float64) int {
+	if targetM >= 12000 {
+		return 600
+	}
+	return 100
+}
+
+func historyDistance(path []int, edges []GraphEdge, historyEdges map[edgeKey]struct{}) float64 {
+	if len(historyEdges) == 0 {
+		return 0
+	}
+	total := 0.0
+	for i := 1; i < len(path) && i-1 < len(edges); i++ {
+		if _, ok := historyEdges[newEdgeKey(path[i-1], path[i])]; ok {
+			total += edges[i-1].Distance
+		}
+	}
+	return total
+}
+
 func hasRepeatedEdges(path []int) bool {
+	return hasRepeatedEdgesExcept(path, nil)
+}
+
+func hasRepeatedEdgesExcept(path []int, allowed map[edgeKey]struct{}) bool {
 	seen := make(map[edgeKey]struct{})
 	for i := 1; i < len(path); i++ {
 		key := newEdgeKey(path[i-1], path[i])
+		if _, ok := allowed[key]; ok {
+			continue
+		}
 		if _, ok := seen[key]; ok {
 			return true
 		}
 		seen[key] = struct{}{}
 	}
 	return false
+}
+
+func addBlockedPathEdges(blocked map[edgeKey]struct{}, path []int) {
+	addBlockedPathEdgesExcept(blocked, path, nil)
+}
+
+func addBlockedPathEdgesExcept(blocked map[edgeKey]struct{}, path []int, allowed map[edgeKey]struct{}) {
+	for i := 1; i < len(path); i++ {
+		key := newEdgeKey(path[i-1], path[i])
+		if _, ok := allowed[key]; ok {
+			continue
+		}
+		blocked[key] = struct{}{}
+	}
+}
+
+func (g *Graph) addHomeConnectorEdgesNearStart(allowed map[edgeKey]struct{}, start int, path []int, maxDistanceM float64) {
+	for i := 1; i < len(path); i++ {
+		if g.nodeDistanceM(start, path[i-1]) > maxDistanceM || g.nodeDistanceM(start, path[i]) > maxDistanceM {
+			continue
+		}
+		allowed[newEdgeKey(path[i-1], path[i])] = struct{}{}
+	}
+}
+
+func (g *Graph) nodeDistanceM(a int, b int) float64 {
+	from := g.Nodes[a]
+	to := g.Nodes[b]
+	return distanceM(from.Lat, from.Lon, to.Lat, to.Lon)
 }
 
 type edgeKey struct {
@@ -491,29 +1015,257 @@ func (g *Graph) nearestNode(coord planner.Coordinate) int {
 	return bestIdx
 }
 
-type projectionKey struct {
-	BearingBucket  int
-	DistanceBucket int
+func emptyHistoryOverlay() historyOverlay {
+	return historyOverlay{
+		AllEdges:    make(map[edgeKey]struct{}),
+		RecentEdges: make(map[edgeKey]struct{}),
+	}
 }
 
-func (g *Graph) nodeNearProjection(start int, bearing float64, distanceM float64, cache map[projectionKey]int) int {
-	key := projectionKey{
-		BearingBucket:  int(math.Round(bearing * 180 / math.Pi / 5)),
-		DistanceBucket: int(math.Round(distanceM / 100)),
+func (g *Graph) historyEdges(store *history.Store) (historyOverlay, error) {
+	started := time.Now()
+	activities, err := store.Activities()
+	if err != nil {
+		return historyOverlay{}, err
 	}
-	if idx, ok := cache[key]; ok {
-		return idx
+	overlay := emptyHistoryOverlay()
+	if len(activities) == 0 || len(g.Nodes) == 0 {
+		return overlay, nil
 	}
-	startNode := g.Nodes[start]
-	targetLat, targetLon := project(startNode.Lat, startNode.Lon, bearing, distanceM)
-	idx := g.nearestNode(planner.Coordinate{Lat: targetLat, Lon: targetLon})
-	cache[key] = idx
-	return idx
+
+	index := newNodeGridIndex(g.Nodes)
+	bounds := g.coordinateBounds(0.002)
+	recentCount := minInt(10, len(activities))
+	totalPoints := 0
+	inBoundsPoints := 0
+	sampledPoints := 0
+	snappedPoints := 0
+	recentSnappedPoints := 0
+	for activityIdx, activity := range activities {
+		recent := activityIdx < recentCount
+		var lastSample planner.Coordinate
+		hasLastSample := false
+		for _, coord := range activity.Coordinates {
+			totalPoints++
+			if !bounds.containsCoordinate(coord) {
+				continue
+			}
+			inBoundsPoints++
+			if hasLastSample && distanceM(lastSample.Lat, lastSample.Lon, coord.Lat, coord.Lon) < 25 {
+				continue
+			}
+			lastSample = coord
+			hasLastSample = true
+			sampledPoints++
+			node := index.nearest(g, coord)
+			if node < 0 {
+				continue
+			}
+			beforeAll := len(overlay.AllEdges)
+			beforeRecent := len(overlay.RecentEdges)
+			g.markEdgesNearCoordinate(overlay.AllEdges, node, coord, 45)
+			if recent {
+				g.markEdgesNearCoordinate(overlay.RecentEdges, node, coord, 45)
+			}
+			if len(overlay.AllEdges) > beforeAll {
+				snappedPoints++
+			}
+			if len(overlay.RecentEdges) > beforeRecent {
+				recentSnappedPoints++
+			}
+		}
+	}
+	overlay.RecentActivities = recentCount
+	log.Printf("local-osm history overlay built: total=%s activities=%d recent_activities=%d total_points=%d in_bounds=%d sampled=%d snapped=%d recent_snapped=%d used_edges=%d recent_used_edges=%d route_nodes=%d route_directed_edges=%d",
+		time.Since(started).Round(time.Millisecond),
+		len(activities),
+		recentCount,
+		totalPoints,
+		inBoundsPoints,
+		sampledPoints,
+		snappedPoints,
+		recentSnappedPoints,
+		len(overlay.AllEdges),
+		len(overlay.RecentEdges),
+		len(g.Nodes),
+		g.directedEdgeCount(),
+	)
+	return overlay, nil
 }
 
-func (g *Graph) shortestPath(start int, goal int, minPavedPercent float64, pavedOnly bool, search *searchWorkspace) ([]int, []GraphEdge, error) {
+type coordinateBounds struct {
+	MinLat float64
+	MaxLat float64
+	MinLon float64
+	MaxLon float64
+}
+
+func (g *Graph) coordinateBounds(margin float64) coordinateBounds {
+	bounds := coordinateBounds{
+		MinLat: math.MaxFloat64,
+		MaxLat: -math.MaxFloat64,
+		MinLon: math.MaxFloat64,
+		MaxLon: -math.MaxFloat64,
+	}
+	for _, node := range g.Nodes {
+		bounds.MinLat = math.Min(bounds.MinLat, node.Lat)
+		bounds.MaxLat = math.Max(bounds.MaxLat, node.Lat)
+		bounds.MinLon = math.Min(bounds.MinLon, node.Lon)
+		bounds.MaxLon = math.Max(bounds.MaxLon, node.Lon)
+	}
+	bounds.MinLat -= margin
+	bounds.MaxLat += margin
+	bounds.MinLon -= margin
+	bounds.MaxLon += margin
+	return bounds
+}
+
+func (b coordinateBounds) containsCoordinate(coord planner.Coordinate) bool {
+	return coord.Lat >= b.MinLat && coord.Lat <= b.MaxLat && coord.Lon >= b.MinLon && coord.Lon <= b.MaxLon
+}
+
+func (g *Graph) markEdgesNearCoordinate(used map[edgeKey]struct{}, node int, coord planner.Coordinate, maxDistanceM float64) {
+	bestKey := edgeKey{}
+	bestDist := math.MaxFloat64
+	for _, edge := range g.Edges[node] {
+		from := g.Nodes[node]
+		to := g.Nodes[edge.To]
+		dist := pointSegmentDistanceM(coord.Lat, coord.Lon, from.Lat, from.Lon, to.Lat, to.Lon)
+		if dist < bestDist {
+			bestDist = dist
+			bestKey = newEdgeKey(node, edge.To)
+		}
+	}
+	if bestDist <= maxDistanceM {
+		used[bestKey] = struct{}{}
+	}
+}
+
+type nodeGridIndex struct {
+	cellSize float64
+	cells    map[gridCell][]int
+}
+
+type gridCell struct {
+	Lat int
+	Lon int
+}
+
+func newNodeGridIndex(nodes []GraphNode) nodeGridIndex {
+	index := nodeGridIndex{
+		cellSize: 0.002,
+		cells:    make(map[gridCell][]int),
+	}
+	for idx, node := range nodes {
+		cell := index.cell(node.Lat, node.Lon)
+		index.cells[cell] = append(index.cells[cell], idx)
+	}
+	return index
+}
+
+func (idx nodeGridIndex) nearest(g *Graph, coord planner.Coordinate) int {
+	base := idx.cell(coord.Lat, coord.Lon)
+	bestIdx := -1
+	bestDist := math.MaxFloat64
+	for radius := 0; radius <= 4; radius++ {
+		for lat := base.Lat - radius; lat <= base.Lat+radius; lat++ {
+			for lon := base.Lon - radius; lon <= base.Lon+radius; lon++ {
+				if radius > 0 && lat > base.Lat-radius && lat < base.Lat+radius && lon > base.Lon-radius && lon < base.Lon+radius {
+					continue
+				}
+				for _, nodeIdx := range idx.cells[gridCell{Lat: lat, Lon: lon}] {
+					node := g.Nodes[nodeIdx]
+					dist := distanceM(coord.Lat, coord.Lon, node.Lat, node.Lon)
+					if dist < bestDist {
+						bestDist = dist
+						bestIdx = nodeIdx
+					}
+				}
+			}
+		}
+		if bestIdx >= 0 {
+			return bestIdx
+		}
+	}
+	return g.nearestNode(coord)
+}
+
+func (idx nodeGridIndex) cell(lat float64, lon float64) gridCell {
+	return gridCell{
+		Lat: int(math.Floor(lat / idx.cellSize)),
+		Lon: int(math.Floor(lon / idx.cellSize)),
+	}
+}
+
+type routeSearchBounds struct {
+	MinLat   float64
+	MaxLat   float64
+	MinLon   float64
+	MaxLon   float64
+	MaxCostM float64
+}
+
+func (g *Graph) newRouteSearchBounds(points []int, targetM float64, minPavedPercent float64, pavedOnly bool, surfacePolicy string) *routeSearchBounds {
+	if len(points) == 0 {
+		return nil
+	}
+	bounds := &routeSearchBounds{
+		MinLat: math.MaxFloat64,
+		MaxLat: -math.MaxFloat64,
+		MinLon: math.MaxFloat64,
+		MaxLon: -math.MaxFloat64,
+	}
+	sumLat := 0.0
+	for _, point := range points {
+		node := g.Nodes[point]
+		bounds.MinLat = math.Min(bounds.MinLat, node.Lat)
+		bounds.MaxLat = math.Max(bounds.MaxLat, node.Lat)
+		bounds.MinLon = math.Min(bounds.MinLon, node.Lon)
+		bounds.MaxLon = math.Max(bounds.MaxLon, node.Lon)
+		sumLat += node.Lat
+	}
+
+	marginM := math.Max(2000, targetM*0.5)
+	latMargin := marginM / 111_320
+	avgLat := sumLat / float64(len(points))
+	lonMeters := 111_320 * math.Cos(degreesToRadians(avgLat))
+	if math.Abs(lonMeters) < 1 {
+		lonMeters = 1
+	}
+	lonMargin := marginM / lonMeters
+
+	bounds.MinLat -= latMargin
+	bounds.MaxLat += latMargin
+	bounds.MinLon -= lonMargin
+	bounds.MaxLon += lonMargin
+	bounds.MaxCostM = (targetM + 500) * maxAllowedSurfaceWeight(minPavedPercent, pavedOnly, surfacePolicy)
+	return bounds
+}
+
+func (b *routeSearchBounds) contains(node GraphNode) bool {
+	if b == nil {
+		return true
+	}
+	return node.Lat >= b.MinLat && node.Lat <= b.MaxLat && node.Lon >= b.MinLon && node.Lon <= b.MaxLon
+}
+
+func maxAllowedSurfaceWeight(minPavedPercent float64, pavedOnly bool, surfacePolicy string) float64 {
+	if !pavedOnly {
+		return surfaceWeight(SurfaceUnpaved, minPavedPercent)
+	}
+	if surfacePolicy == SurfacePolicyAssumePaved {
+		return surfaceWeight(SurfaceUnknown, minPavedPercent)
+	}
+	return surfaceWeight(SurfacePaved, minPavedPercent)
+}
+
+func (g *Graph) shortestPath(start int, goal int, minPavedPercent float64, pavedOnly bool, surfacePolicy string, blockedEdges map[edgeKey]struct{}, avoidEdges map[edgeKey]struct{}, search *searchWorkspace) ([]int, []GraphEdge, error) {
 	if start == goal {
 		return []int{start}, nil, nil
+	}
+	stats := search.Stats
+	if stats != nil {
+		stats.SearchCalls++
 	}
 	search.Reset()
 	search.Dist[start] = 0
@@ -523,19 +1275,68 @@ func (g *Graph) shortestPath(start int, goal int, minPavedPercent float64, paved
 	heap.Init(&pq)
 
 	for pq.Len() > 0 {
+		if stats != nil && pq.Len() > stats.MaxQueueLen {
+			stats.MaxQueueLen = pq.Len()
+		}
 		item := heap.Pop(&pq).(queueItem)
+		expectedPriority := search.Dist[item.Node] + heuristicM(g, item.Node, goal)
+		if item.Priority > expectedPriority+0.000001 {
+			if stats != nil {
+				stats.StaleQueueSkips++
+			}
+			continue
+		}
+		if search.Closed[item.Node] {
+			if stats != nil {
+				stats.ClosedQueueSkips++
+			}
+			continue
+		}
+		search.Closed[item.Node] = true
+		if stats != nil {
+			stats.SettledNodes++
+			if stats.SettledNodes%1024 == 0 && search.deadlineExpired() {
+				stats.TimedOut = true
+				return nil, nil, errRouteSearchTimedOut
+			}
+		}
 		if item.Node == goal {
 			break
 		}
 		for _, edge := range g.Edges[item.Node] {
-			if pavedOnly && edge.Surface != SurfacePaved {
+			if !usableSurface(edge.Surface, pavedOnly, surfacePolicy) {
+				continue
+			}
+			if _, blocked := blockedEdges[newEdgeKey(item.Node, edge.To)]; blocked {
+				continue
+			}
+			if search.Closed[edge.To] {
+				continue
+			}
+			if search.Bounds != nil && !search.Bounds.contains(g.Nodes[edge.To]) {
+				if stats != nil {
+					stats.BoundSkips++
+				}
 				continue
 			}
 			cost := edge.Distance * surfaceWeight(edge.Surface, minPavedPercent)
+			if _, avoid := avoidEdges[newEdgeKey(item.Node, edge.To)]; avoid {
+				cost *= recentRoadPenaltyWeight
+			}
 			next := search.Dist[item.Node] + cost
+			maxCostM := searchMaxCostM(search.Bounds, len(avoidEdges) > 0)
+			if maxCostM > 0 && next > maxCostM {
+				if stats != nil {
+					stats.CostSkips++
+				}
+				continue
+			}
 			if next < search.Dist[edge.To] {
 				if search.Dist[edge.To] == math.MaxFloat64 {
 					search.Touched = append(search.Touched, edge.To)
+				}
+				if stats != nil {
+					stats.TouchedNodes++
 				}
 				search.Dist[edge.To] = next
 				search.Prev[edge.To] = item.Node
@@ -564,11 +1365,25 @@ func (g *Graph) shortestPath(start int, goal int, minPavedPercent float64, paved
 	return path, edges, nil
 }
 
+func searchMaxCostM(bounds *routeSearchBounds, avoidingRecentRoads bool) float64 {
+	if bounds == nil || bounds.MaxCostM <= 0 {
+		return 0
+	}
+	if avoidingRecentRoads {
+		return bounds.MaxCostM * recentRoadPenaltyWeight
+	}
+	return bounds.MaxCostM
+}
+
 type searchWorkspace struct {
 	Dist     []float64
 	Prev     []int
 	PrevEdge []GraphEdge
+	Closed   []bool
 	Touched  []int
+	Bounds   *routeSearchBounds
+	Deadline time.Time
+	Stats    *routeSearchStats
 }
 
 func (g *Graph) newSearchWorkspace() *searchWorkspace {
@@ -576,6 +1391,7 @@ func (g *Graph) newSearchWorkspace() *searchWorkspace {
 		Dist:     make([]float64, len(g.Nodes)),
 		Prev:     make([]int, len(g.Nodes)),
 		PrevEdge: make([]GraphEdge, len(g.Nodes)),
+		Closed:   make([]bool, len(g.Nodes)),
 	}
 	for i := range search.Dist {
 		search.Dist[i] = math.MaxFloat64
@@ -589,8 +1405,26 @@ func (s *searchWorkspace) Reset() {
 		s.Dist[idx] = math.MaxFloat64
 		s.Prev[idx] = -1
 		s.PrevEdge[idx] = GraphEdge{}
+		s.Closed[idx] = false
 	}
 	s.Touched = s.Touched[:0]
+}
+
+func (s *searchWorkspace) deadlineExpired() bool {
+	return !s.Deadline.IsZero() && time.Now().After(s.Deadline)
+}
+
+type routeSearchStats struct {
+	CandidateFailures int
+	TimedOut          bool
+	SearchCalls       int
+	SettledNodes      int
+	TouchedNodes      int
+	StaleQueueSkips   int
+	ClosedQueueSkips  int
+	BoundSkips        int
+	CostSkips         int
+	MaxQueueLen       int
 }
 
 func heuristicM(g *Graph, from int, to int) float64 {
@@ -615,7 +1449,17 @@ func surfaceWeight(surface int, minPavedPercent float64) float64 {
 	}
 }
 
-func localScore(candidate localCandidate, targetM float64, minPavedPercent float64) float64 {
+func usableSurface(surface int, pavedOnly bool, surfacePolicy string) bool {
+	if !pavedOnly {
+		return true
+	}
+	if surface == SurfacePaved {
+		return true
+	}
+	return surface == SurfaceUnknown && surfacePolicy == SurfacePolicyAssumePaved
+}
+
+func localScore(candidate localCandidate, targetM float64, minPavedPercent float64, preferUnrunRoads bool) float64 {
 	shortPenalty := math.Max(0, targetM-candidate.DistanceM) / targetM * 1000
 	extraMeters := math.Max(0, candidate.DistanceM-targetM)
 	extraPenalty := extraMeters / targetM
@@ -626,7 +1470,11 @@ func localScore(candidate localCandidate, targetM float64, minPavedPercent float
 	if candidate.PavedPercent < minPavedPercent {
 		pavedPenalty *= 4
 	}
-	return shortPenalty + extraPenalty + pavedPenalty
+	historyPenalty := 0.0
+	if preferUnrunRoads {
+		historyPenalty = candidate.PreviouslyRunPercent*8 + candidate.RecentPreviouslyRunPercent*45
+	}
+	return shortPenalty + extraPenalty + pavedPenalty + historyPenalty
 }
 
 func edgeStats(edges []GraphEdge) (total float64, paved float64, unpaved float64, unknown float64) {
@@ -703,6 +1551,54 @@ func project(lat float64, lon float64, bearing float64, distanceM float64) (floa
 	return radiansToDegrees(lat2), radiansToDegrees(lon2)
 }
 
+func pointSegmentDistanceM(pointLat float64, pointLon float64, aLat float64, aLon float64, bLat float64, bLon float64) float64 {
+	const earthRadiusM = 6371000
+	originLat := degreesToRadians(pointLat)
+	toXY := func(lat float64, lon float64) (float64, float64) {
+		x := degreesToRadians(lon-pointLon) * math.Cos(originLat) * earthRadiusM
+		y := degreesToRadians(lat-pointLat) * earthRadiusM
+		return x, y
+	}
+	ax, ay := toXY(aLat, aLon)
+	bx, by := toXY(bLat, bLon)
+	dx := bx - ax
+	dy := by - ay
+	lengthSquared := dx*dx + dy*dy
+	if lengthSquared == 0 {
+		return math.Hypot(ax, ay)
+	}
+	t := -(ax*dx + ay*dy) / lengthSquared
+	t = math.Max(0, math.Min(1, t))
+	closestX := ax + t*dx
+	closestY := ay + t*dy
+	return math.Hypot(closestX, closestY)
+}
+
+func bearingRadians(lat1 float64, lon1 float64, lat2 float64, lon2 float64) float64 {
+	phi1 := degreesToRadians(lat1)
+	phi2 := degreesToRadians(lat2)
+	dLambda := degreesToRadians(lon2 - lon1)
+	y := math.Sin(dLambda) * math.Cos(phi2)
+	x := math.Cos(phi1)*math.Sin(phi2) - math.Sin(phi1)*math.Cos(phi2)*math.Cos(dLambda)
+	return normalizeBearing(math.Atan2(y, x))
+}
+
+func normalizeBearing(value float64) float64 {
+	value = math.Mod(value, 2*math.Pi)
+	if value < 0 {
+		value += 2 * math.Pi
+	}
+	return value
+}
+
+func angularDifference(a float64, b float64) float64 {
+	diff := math.Abs(normalizeBearing(a) - normalizeBearing(b))
+	if diff > math.Pi {
+		return 2*math.Pi - diff
+	}
+	return diff
+}
+
 func degreesToRadians(value float64) float64 {
 	return value * math.Pi / 180
 }
@@ -714,4 +1610,18 @@ func radiansToDegrees(value float64) float64 {
 func round(value float64, places int) float64 {
 	pow := math.Pow(10, float64(places))
 	return math.Round(value*pow) / pow
+}
+
+func minInt(a int, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a int, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

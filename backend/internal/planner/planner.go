@@ -14,6 +14,10 @@ type RouteProvider interface {
 	GenerateRoundTrip(ctxReq *http.Request, req CandidateRequest) (CandidateRoute, error)
 }
 
+type plannerAttemptProvider interface {
+	PlannerAttempts() int
+}
+
 type Planner struct {
 	provider        RouteProvider
 	allowMockRoutes bool
@@ -48,7 +52,7 @@ func (p Planner) Generate(r *http.Request, req GenerateRouteRequest) (RouteRespo
 }
 
 func (p Planner) bestCandidate(r *http.Request, req GenerateRouteRequest, targetM float64, seed int64) (CandidateRoute, error) {
-	const attempts = 10
+	attempts := p.providerAttempts()
 
 	lengthMultipliers := []float64{1, 1.02, 1.04, 1.06, 1.08}
 
@@ -65,12 +69,14 @@ func (p Planner) bestCandidate(r *http.Request, req GenerateRouteRequest, target
 		}
 
 		route, err := p.provider.GenerateRoundTrip(r, CandidateRequest{
-			Start:           start,
-			Home:            req.Home,
-			TargetDistanceM: requestedDistanceM,
-			PreferPaved:     req.PreferPaved,
-			MinPavedPercent: req.MinPavedPercent,
-			Seed:            candidateSeed,
+			Start:            start,
+			Home:             req.Home,
+			TargetDistanceM:  requestedDistanceM,
+			PreferPaved:      req.PreferPaved,
+			MinPavedPercent:  req.MinPavedPercent,
+			SurfacePolicy:    req.SurfacePolicy,
+			PreferUnrunRoads: req.PreferUnrunRoads,
+			Seed:             candidateSeed,
 		})
 		if err != nil {
 			lastErr = err
@@ -93,6 +99,20 @@ func (p Planner) bestCandidate(r *http.Request, req GenerateRouteRequest, target
 	}
 
 	return CandidateRoute{}, lastErr
+}
+
+func (p Planner) providerAttempts() int {
+	const defaultAttempts = 10
+
+	attemptProvider, ok := p.provider.(plannerAttemptProvider)
+	if !ok {
+		return defaultAttempts
+	}
+	attempts := attemptProvider.PlannerAttempts()
+	if attempts <= 0 {
+		return defaultAttempts
+	}
+	return attempts
 }
 
 func routeScore(route CandidateRoute, targetM float64, minPavedPercent float64) float64 {
@@ -171,6 +191,8 @@ func routeResponse(route CandidateRoute, req GenerateRouteRequest, warnings []st
 		PavedPercent:          route.PavedPercent,
 		UnpavedPercent:        route.UnpavedPercent,
 		UnknownSurfacePercent: route.UnknownPercent,
+		UnrunPercent:          route.UnrunPercent,
+		PreviouslyRunPercent:  route.PreviouslyRunPercent,
 		Provider:              route.Provider,
 		Warnings:              allWarnings,
 	}
@@ -191,6 +213,9 @@ func validate(req GenerateRouteRequest) error {
 	}
 	if req.MinPavedPercent < 0 || req.MinPavedPercent > 100 {
 		return fmt.Errorf("%w: minPavedPercent must be between 0 and 100", ErrInvalidRequest)
+	}
+	if req.SurfacePolicy != "" && req.SurfacePolicy != "strict" && req.SurfacePolicy != "assume_paved" {
+		return fmt.Errorf("%w: surfacePolicy must be strict or assume_paved", ErrInvalidRequest)
 	}
 	return nil
 }

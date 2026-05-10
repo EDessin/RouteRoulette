@@ -28,6 +28,8 @@ type GenerateRouteRequest struct {
 	EstimatedPaceMinPerKm *float64   `json:"estimatedPaceMinPerKm,omitempty"`
 	PreferPaved           bool       `json:"preferPaved"`
 	MinPavedPercent       float64    `json:"minPavedPercent"`
+	SurfacePolicy         string     `json:"surfacePolicy,omitempty"`
+	PreferUnrunRoads      bool       `json:"preferUnrunRoads"`
 	Seed                  *int64     `json:"seed,omitempty"`
 }
 
@@ -40,6 +42,8 @@ type RouteResponse struct {
 	PavedPercent          *float64    `json:"pavedPercent,omitempty"`
 	UnpavedPercent        *float64    `json:"unpavedPercent,omitempty"`
 	UnknownSurfacePercent *float64    `json:"unknownSurfacePercent,omitempty"`
+	UnrunPercent          *float64    `json:"unrunPercent,omitempty"`
+	PreviouslyRunPercent  *float64    `json:"previouslyRunPercent,omitempty"`
 	Provider              string      `json:"provider"`
 	Warnings              []string    `json:"warnings,omitempty"`
 }
@@ -50,22 +54,26 @@ type GeoJSONLine struct {
 }
 
 type CandidateRequest struct {
-	Start           Coordinate
-	Home            Coordinate
-	TargetDistanceM float64
-	PreferPaved     bool
-	MinPavedPercent float64
-	Seed            int64
+	Start            Coordinate
+	Home             Coordinate
+	TargetDistanceM  float64
+	PreferPaved      bool
+	MinPavedPercent  float64
+	SurfacePolicy    string
+	PreferUnrunRoads bool
+	Seed             int64
 }
 
 type CandidateRoute struct {
-	Start           Coordinate
-	DistanceM       float64
-	DurationSeconds float64
-	Geometry        GeoJSONLine
-	PavedPercent    *float64
-	UnpavedPercent  *float64
-	UnknownPercent  *float64
-	Provider        string
-	Warnings        []string
+	Start                Coordinate
+	DistanceM            float64
+	DurationSeconds      float64
+	Geometry             GeoJSONLine
+	PavedPercent         *float64
+	UnpavedPercent       *float64
+	UnknownPercent       *float64
+	UnrunPercent         *float64
+	PreviouslyRunPercent *float64
+	Provider             string
+	Warnings             []string
 }
