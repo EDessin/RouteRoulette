@@ -274,6 +274,43 @@ func TestRepeatedEdgesAllowsShortHomeConnector(t *testing.T) {
 	}
 }
 
+func TestCycleCandidateBuildsDisjointCycle(t *testing.T) {
+	graph := Graph{
+		Nodes: []GraphNode{
+			{Lat: 0, Lon: 0},
+			{Lat: 0, Lon: 0.014},
+			{Lat: 0.006, Lon: 0.007},
+			{Lat: -0.006, Lon: 0.007},
+		},
+		Edges: make([][]GraphEdge, 4),
+	}
+	addTestEdge(&graph, 0, 2, SurfacePaved)
+	addTestEdge(&graph, 2, 1, SurfacePaved)
+	addTestEdge(&graph, 0, 3, SurfacePaved)
+	addTestEdge(&graph, 3, 1, SurfacePaved)
+
+	anchor := waypointNode{
+		Index:   1,
+		Bearing: bearingRadians(graph.Nodes[0].Lat, graph.Nodes[0].Lon, graph.Nodes[1].Lat, graph.Nodes[1].Lon),
+		DistM:   distanceM(graph.Nodes[0].Lat, graph.Nodes[0].Lon, graph.Nodes[1].Lat, graph.Nodes[1].Lon),
+		Degree:  graph.usableDegree(1, true, SurfacePolicyStrict),
+	}
+
+	candidate, err := graph.cycleCandidate(0, 3900, 70, true, SurfacePolicyStrict, rand.New(rand.NewSource(1)), waypointSet{Nodes: []waypointNode{anchor}}, emptyHistoryOverlay(), graph.newSearchWorkspace())
+	if err != nil {
+		t.Fatalf("cycleCandidate() returned error: %v", err)
+	}
+	if candidate.DistanceM < 3900 || candidate.DistanceM > 4400 {
+		t.Fatalf("cycleCandidate() distance = %.0f, want 3900..4400", candidate.DistanceM)
+	}
+	if hasRepeatedEdges(candidate.Path) {
+		t.Fatalf("cycleCandidate() repeated a road segment in path %v", candidate.Path)
+	}
+	if candidate.PavedPercent != 100 {
+		t.Fatalf("cycleCandidate() paved percent = %.0f, want 100", candidate.PavedPercent)
+	}
+}
+
 func TestHomeConnectorEdgesUseSegmentsNearStart(t *testing.T) {
 	graph := Graph{
 		Nodes: []GraphNode{
