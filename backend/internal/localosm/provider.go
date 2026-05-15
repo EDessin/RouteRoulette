@@ -664,7 +664,7 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest, history historyOverla
 			best = candidate
 			bestScore = score
 		}
-		if candidate.DistanceM >= req.TargetDistanceM && candidate.DistanceM <= req.TargetDistanceM+500 && math.Abs(candidate.PavedPercent-req.MinPavedPercent) <= 5 {
+		if candidate.DistanceM >= req.TargetDistanceM && candidate.DistanceM <= req.TargetDistanceM+500 && (req.MinPavedPercent <= 0 || math.Abs(candidate.PavedPercent-req.MinPavedPercent) <= 5) {
 			break
 		}
 	}
@@ -797,9 +797,15 @@ type waypointNode struct {
 
 func (g *Graph) newWaypointSet(start int, targetM float64, pavedOnly bool, surfacePolicy string) waypointSet {
 	inComponent := g.connectedComponent(start, pavedOnly, surfacePolicy)
-	loopRadiusM := math.Max(600, targetM/(2*math.Pi))
-	minDistM := math.Max(250, loopRadiusM*0.45)
-	maxDistM := math.Max(minDistM+250, loopRadiusM*1.75)
+	loopRadiusM := loopRadiusForTarget(targetM)
+	minWaypointM := 250.0
+	minRangeM := 250.0
+	if useShortLoopGenerator(targetM) {
+		minWaypointM = 120
+		minRangeM = 120
+	}
+	minDistM := math.Max(minWaypointM, loopRadiusM*0.45)
+	maxDistM := math.Max(minDistM+minRangeM, loopRadiusM*1.75)
 	minDegree := 3
 	if targetM >= 12000 {
 		minDegree = 4
@@ -914,7 +920,7 @@ func (set waypointSet) pick(desiredBearing float64, desiredDistanceM float64, us
 }
 
 func (g *Graph) loopCandidate(start int, targetM float64, minPavedPercent float64, pavedOnly bool, surfacePolicy string, rng *rand.Rand, waypointSet waypointSet, history historyOverlay, avoided avoidanceOverlay, search *searchWorkspace) (localCandidate, error) {
-	radiusM := math.Max(600, targetM/(2*math.Pi))
+	radiusM := loopRadiusForTarget(targetM)
 	baseBearing := rng.Float64() * 2 * math.Pi
 	waypointCount := waypointCountForTarget(targetM, rng)
 	waypoints := make([]int, 0, waypointCount)
@@ -1042,7 +1048,22 @@ func useCycleGenerator(targetM float64) bool {
 	return targetM >= 12000
 }
 
+func useShortLoopGenerator(targetM float64) bool {
+	return targetM < 3000
+}
+
+func loopRadiusForTarget(targetM float64) float64 {
+	radius := targetM / (2 * math.Pi)
+	if useShortLoopGenerator(targetM) {
+		return math.Max(220, radius)
+	}
+	return math.Max(600, radius)
+}
+
 func waypointCountForTarget(targetM float64, rng *rand.Rand) int {
+	if useShortLoopGenerator(targetM) {
+		return 2
+	}
 	if targetM < 12000 {
 		return 3
 	}
@@ -1659,9 +1680,12 @@ func localScore(candidate localCandidate, targetM float64, minPavedPercent float
 	if extraMeters > 500 {
 		extraPenalty += (extraMeters - 500) / 10
 	}
-	pavedPenalty := math.Abs(candidate.PavedPercent-minPavedPercent) * 10
-	if candidate.PavedPercent < minPavedPercent {
-		pavedPenalty *= 4
+	pavedPenalty := 0.0
+	if minPavedPercent > 0 {
+		pavedPenalty = math.Abs(candidate.PavedPercent-minPavedPercent) * 10
+		if candidate.PavedPercent < minPavedPercent {
+			pavedPenalty *= 4
+		}
 	}
 	historyPenalty := 0.0
 	if preferUnrunRoads {

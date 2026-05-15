@@ -251,6 +251,23 @@ func TestLocalScorePenalizesPreviouslyRunRoadsWhenPreferred(t *testing.T) {
 	}
 }
 
+func TestLocalScoreIgnoresPavedDifferenceWithoutMinimum(t *testing.T) {
+	targetM := 2000.0
+
+	pavedRoute := localCandidate{
+		DistanceM:    2000,
+		PavedPercent: 100,
+	}
+	unpavedRoute := localCandidate{
+		DistanceM:    2000,
+		PavedPercent: 0,
+	}
+
+	if localScore(pavedRoute, targetM, 0, false) != localScore(unpavedRoute, targetM, 0, false) {
+		t.Fatal("expected paved percentage to be ignored when no minimum paved percentage is requested")
+	}
+}
+
 func TestHasRepeatedEdgesDetectsOutAndBack(t *testing.T) {
 	if !hasRepeatedEdges([]int{1, 2, 1}) {
 		t.Fatal("expected an out-and-back path to count as a repeated road segment")
@@ -313,6 +330,34 @@ func TestCycleCandidateBuildsDisjointCycle(t *testing.T) {
 	}
 }
 
+func TestLoopCandidateBuildsShortRouteWhenPavingAndHistoryAreDisabled(t *testing.T) {
+	graph := Graph{
+		Nodes: []GraphNode{
+			{Lat: 0, Lon: 0},
+			{Lat: 0, Lon: 0.003},
+			{Lat: 0.003, Lon: 0.003},
+			{Lat: 0.003, Lon: 0},
+		},
+		Edges: make([][]GraphEdge, 4),
+	}
+	addTestEdge(&graph, 0, 1, SurfacePaved)
+	addTestEdge(&graph, 1, 2, SurfaceUnknown)
+	addTestEdge(&graph, 2, 3, SurfaceUnpaved)
+	addTestEdge(&graph, 3, 0, SurfacePaved)
+
+	waypoints := graph.newWaypointSet(0, 1000, false, SurfacePolicyStrict)
+	candidate, err := graph.loopCandidate(0, 1000, 0, false, SurfacePolicyStrict, rand.New(rand.NewSource(4)), waypoints, emptyHistoryOverlay(), emptyAvoidanceOverlay(), graph.newSearchWorkspace())
+	if err != nil {
+		t.Fatalf("loopCandidate() returned error: %v", err)
+	}
+	if candidate.DistanceM < 1000 || candidate.DistanceM > 1500 {
+		t.Fatalf("loopCandidate() distance = %.0f, want 1000..1500", candidate.DistanceM)
+	}
+	if hasRepeatedEdges(candidate.Path) {
+		t.Fatalf("loopCandidate() repeated a road segment in path %v", candidate.Path)
+	}
+}
+
 func TestHomeConnectorEdgesUseSegmentsNearStart(t *testing.T) {
 	graph := Graph{
 		Nodes: []GraphNode{
@@ -336,6 +381,9 @@ func TestHomeConnectorEdgesUseSegmentsNearStart(t *testing.T) {
 }
 
 func TestWaypointCountUsesMoreStopsForLongRoutes(t *testing.T) {
+	if got := waypointCountForTarget(2000, rand.New(rand.NewSource(1))); got != 2 {
+		t.Fatalf("waypointCountForTarget(2000) = %d, want 2", got)
+	}
 	if got := waypointCountForTarget(8000, rand.New(rand.NewSource(1))); got != 3 {
 		t.Fatalf("waypointCountForTarget(8000) = %d, want 3", got)
 	}
