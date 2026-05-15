@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/EDessin/RouteRoulette/backend/internal/avoidance"
 	"github.com/EDessin/RouteRoulette/backend/internal/history"
 	"github.com/EDessin/RouteRoulette/backend/internal/planner"
 	"github.com/paulmach/osm"
@@ -31,20 +32,24 @@ const (
 	SurfacePolicyStrict      = "strict"
 	SurfacePolicyAssumePaved = "assume_paved"
 
-	routeGenerationBudget   = 10 * time.Second
-	recentRoadPenaltyWeight = 3
-	sharedHomeConnectorM    = 200
+	routeGenerationBudget    = 10 * time.Second
+	recentRoadPenaltyWeight  = 3
+	avoidedRoadPenaltyWeight = 50
+	maxAllowedAvoidedRoadM   = 50
+	sharedHomeConnectorM     = 200
+	graphCacheVersion        = 2
 )
 
 var errRouteSearchTimedOut = errors.New("route search timed out")
 
 type Config struct {
-	DataDir       string
-	ExtractPath   string
-	ExtractURL    string
-	RadiusKm      float64
-	AllowDownload bool
-	HistoryStore  *history.Store
+	DataDir        string
+	ExtractPath    string
+	ExtractURL     string
+	RadiusKm       float64
+	AllowDownload  bool
+	HistoryStore   *history.Store
+	AvoidanceStore *avoidance.Store
 }
 
 type Provider struct {
@@ -69,6 +74,10 @@ type historyOverlay struct {
 	AllEdges         map[edgeKey]struct{}
 	RecentEdges      map[edgeKey]struct{}
 	RecentActivities int
+}
+
+type avoidanceOverlay struct {
+	RoadsByWayID map[int64]avoidance.Road
 }
 
 func NewProvider(cfg Config) Provider {
@@ -125,15 +134,26 @@ func (p Provider) GenerateRoundTrip(ctxReq *http.Request, req planner.CandidateR
 		}
 		historyDuration = time.Since(historyStarted)
 	}
+	routeAvoidance := emptyAvoidanceOverlay()
+	avoidanceDuration := time.Duration(0)
+	if p.cfg.AvoidanceStore != nil {
+		avoidanceStarted := time.Now()
+		routeAvoidance, err = p.loadAvoidedRoads()
+		if err != nil {
+			return planner.CandidateRoute{}, err
+		}
+		avoidanceDuration = time.Since(avoidanceStarted)
+	}
 
 	loopStarted := time.Now()
-	route, err := routeGraph.GenerateLoop(req, routeHistory)
+	route, err := routeGraph.GenerateLoop(req, routeHistory, routeAvoidance)
 	if err != nil {
-		log.Printf("local-osm route failed: total=%s graph_load=%s subgraph=%s history=%s loop=%s full_nodes=%d full_directed_edges=%d route_nodes=%d route_directed_edges=%d subgraph_radius_km=%.1f route_history_edges=%d recent_history_edges=%d recent_activities=%d err=%v",
+		log.Printf("local-osm route failed: total=%s graph_load=%s subgraph=%s history=%s avoidance=%s loop=%s full_nodes=%d full_directed_edges=%d route_nodes=%d route_directed_edges=%d subgraph_radius_km=%.1f route_history_edges=%d recent_history_edges=%d recent_activities=%d avoided_roads=%d err=%v",
 			time.Since(started).Round(time.Millisecond),
 			graphLoadDuration.Round(time.Millisecond),
 			subgraphDuration.Round(time.Millisecond),
 			historyDuration.Round(time.Millisecond),
+			avoidanceDuration.Round(time.Millisecond),
 			time.Since(loopStarted).Round(time.Millisecond),
 			len(graph.Nodes),
 			graph.directedEdgeCount(),
@@ -143,15 +163,17 @@ func (p Provider) GenerateRoundTrip(ctxReq *http.Request, req planner.CandidateR
 			len(routeHistory.AllEdges),
 			len(routeHistory.RecentEdges),
 			routeHistory.RecentActivities,
+			len(routeAvoidance.RoadsByWayID),
 			err,
 		)
 		return planner.CandidateRoute{}, err
 	}
-	log.Printf("local-osm route generated: total=%s graph_load=%s subgraph=%s history=%s loop=%s full_nodes=%d full_directed_edges=%d route_nodes=%d route_directed_edges=%d subgraph_radius_km=%.1f route_history_edges=%d recent_history_edges=%d recent_activities=%d distance_km=%.2f",
+	log.Printf("local-osm route generated: total=%s graph_load=%s subgraph=%s history=%s avoidance=%s loop=%s full_nodes=%d full_directed_edges=%d route_nodes=%d route_directed_edges=%d subgraph_radius_km=%.1f route_history_edges=%d recent_history_edges=%d recent_activities=%d avoided_roads=%d distance_km=%.2f",
 		time.Since(started).Round(time.Millisecond),
 		graphLoadDuration.Round(time.Millisecond),
 		subgraphDuration.Round(time.Millisecond),
 		historyDuration.Round(time.Millisecond),
+		avoidanceDuration.Round(time.Millisecond),
 		time.Since(loopStarted).Round(time.Millisecond),
 		len(graph.Nodes),
 		graph.directedEdgeCount(),
@@ -161,6 +183,7 @@ func (p Provider) GenerateRoundTrip(ctxReq *http.Request, req planner.CandidateR
 		len(routeHistory.AllEdges),
 		len(routeHistory.RecentEdges),
 		routeHistory.RecentActivities,
+		len(routeAvoidance.RoadsByWayID),
 		route.DistanceM/1000,
 	)
 	return route, nil
@@ -232,6 +255,14 @@ func (p Provider) loadHistoryEdges(graph *Graph, cacheKey string) (historyOverla
 	return overlay, nil
 }
 
+func (p Provider) loadAvoidedRoads() (avoidanceOverlay, error) {
+	roads, err := p.cfg.AvoidanceStore.List()
+	if err != nil {
+		return avoidanceOverlay{}, err
+	}
+	return avoidanceOverlay{RoadsByWayID: avoidance.ByWayID(roads)}, nil
+}
+
 func (p Provider) historyCacheKey(req planner.CandidateRequest, subgraphRadiusKm float64, pavedOnly bool, surfacePolicy string) string {
 	return fmt.Sprintf("%s|start=%.5f,%.5f|target=%.0fm|radius=%.1fkm|paved=%t|surface=%s",
 		p.graphCachePath(req.Home),
@@ -291,6 +322,7 @@ func (p Provider) graphCachePath(home planner.Coordinate) string {
 }
 
 type Graph struct {
+	Version   int                `json:"version"`
 	Home      planner.Coordinate `json:"home"`
 	RadiusKm  float64            `json:"radiusKm"`
 	CreatedAt string             `json:"createdAt"`
@@ -307,6 +339,8 @@ type GraphEdge struct {
 	To       int     `json:"to"`
 	Distance float64 `json:"distance"`
 	Surface  int     `json:"surface"`
+	OSMWayID int64   `json:"osmWayId,omitempty"`
+	Name     string  `json:"name,omitempty"`
 }
 
 func loadGraphCache(path string) (*Graph, error) {
@@ -319,6 +353,9 @@ func loadGraphCache(path string) (*Graph, error) {
 	var graph Graph
 	if err := json.NewDecoder(file).Decode(&graph); err != nil {
 		return nil, err
+	}
+	if graph.Version != graphCacheVersion {
+		return nil, errors.New("graph cache version is outdated")
 	}
 	if len(graph.Nodes) == 0 || len(graph.Edges) != len(graph.Nodes) {
 		return nil, errors.New("invalid graph cache")
@@ -361,6 +398,7 @@ func BuildGraphFromPBF(ctx context.Context, path string, home planner.Coordinate
 	}
 
 	graph := &Graph{
+		Version:   graphCacheVersion,
 		Home:      home,
 		RadiusKm:  radiusKm,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
@@ -382,6 +420,8 @@ func BuildGraphFromPBF(ctx context.Context, path string, home planner.Coordinate
 		}
 		tags := way.Tags.Map()
 		surface := classifySurface(tags)
+		name := strings.TrimSpace(tags["name"])
+		wayID := int64(way.ID)
 		for i := 1; i < len(way.Nodes); i++ {
 			aCoord, aOK := nodeCoords[way.Nodes[i-1].ID]
 			bCoord, bOK := nodeCoords[way.Nodes[i].ID]
@@ -398,8 +438,8 @@ func BuildGraphFromPBF(ctx context.Context, path string, home planner.Coordinate
 				continue
 			}
 			dist := distanceM(aCoord.Lat, aCoord.Lon, bCoord.Lat, bCoord.Lon)
-			graph.Edges[a] = append(graph.Edges[a], GraphEdge{To: b, Distance: dist, Surface: surface})
-			graph.Edges[b] = append(graph.Edges[b], GraphEdge{To: a, Distance: dist, Surface: surface})
+			graph.Edges[a] = append(graph.Edges[a], GraphEdge{To: b, Distance: dist, Surface: surface, OSMWayID: wayID, Name: name})
+			graph.Edges[b] = append(graph.Edges[b], GraphEdge{To: a, Distance: dist, Surface: surface, OSMWayID: wayID, Name: name})
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -473,6 +513,7 @@ func (g *Graph) routeSubgraph(start planner.Coordinate, targetM float64, pavedOn
 		oldToNew[idx] = -1
 	}
 	subgraph := &Graph{
+		Version:   graphCacheVersion,
 		Home:      start,
 		RadiusKm:  radiusKm,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
@@ -492,6 +533,8 @@ func (g *Graph) routeSubgraph(start planner.Coordinate, targetM float64, pavedOn
 				To:       newTo,
 				Distance: edge.Distance,
 				Surface:  edge.Surface,
+				OSMWayID: edge.OSMWayID,
+				Name:     edge.Name,
 			})
 		}
 	}
@@ -561,7 +604,7 @@ func classifySurface(tags map[string]string) int {
 	}
 }
 
-func (g *Graph) GenerateLoop(req planner.CandidateRequest, history historyOverlay) (planner.CandidateRoute, error) {
+func (g *Graph) GenerateLoop(req planner.CandidateRequest, history historyOverlay, avoided avoidanceOverlay) (planner.CandidateRoute, error) {
 	started := time.Now()
 	if len(g.Nodes) == 0 {
 		return planner.CandidateRoute{}, errors.New("local graph is empty")
@@ -603,9 +646,9 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest, history historyOverla
 		var candidate localCandidate
 		var err error
 		if useCycleGenerator(req.TargetDistanceM) && len(cycleAnchors.Nodes) > 0 {
-			candidate, err = g.cycleCandidate(start, req.TargetDistanceM, req.MinPavedPercent, pavedOnly, policy, rng, cycleAnchors, history, search)
+			candidate, err = g.cycleCandidate(start, req.TargetDistanceM, req.MinPavedPercent, pavedOnly, policy, rng, cycleAnchors, history, avoided, search)
 		} else {
-			candidate, err = g.loopCandidate(start, req.TargetDistanceM, req.MinPavedPercent, pavedOnly, policy, rng, waypoints, history, search)
+			candidate, err = g.loopCandidate(start, req.TargetDistanceM, req.MinPavedPercent, pavedOnly, policy, rng, waypoints, history, avoided, search)
 		}
 		if err != nil {
 			stats.CandidateFailures++
@@ -680,7 +723,11 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest, history historyOverla
 		unrun = &unrunValue
 		previouslyRun = &previouslyRunValue
 	}
+	avoidedDistance := round(best.AvoidedRoadDistanceM, 1)
 	warnings := []string{}
+	if best.AvoidedRoadDistanceM > 0 {
+		warnings = append(warnings, fmt.Sprintf("This route uses %.0f meters of an avoided road to cross or connect briefly.", best.AvoidedRoadDistanceM))
+	}
 	if policy == SurfacePolicyAssumePaved && unknown > 0 {
 		warnings = append(warnings, fmt.Sprintf("%.0f%% of this route uses roads without OSM surface tags and treats them as paved because of the selected surface-data mode.", unknown))
 	}
@@ -705,12 +752,15 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest, history historyOverla
 		UnknownPercent:       &unknown,
 		UnrunPercent:         unrun,
 		PreviouslyRunPercent: previouslyRun,
+		AvoidedRoadDistanceM: &avoidedDistance,
+		Segments:             routeSegments(best.Path, best.Edges),
 		Provider:             "local-osm",
 		Warnings:             warnings,
 	}, nil
 }
 
 type localCandidate struct {
+	Edges                      []GraphEdge
 	Path                       []int
 	DistanceM                  float64
 	PavedPercent               float64
@@ -720,6 +770,7 @@ type localCandidate struct {
 	UnrunPercent               float64
 	PreviouslyRunPercent       float64
 	RecentPreviouslyRunPercent float64
+	AvoidedRoadDistanceM       float64
 }
 
 func pavedOnly(req planner.CandidateRequest) bool {
@@ -862,7 +913,7 @@ func (set waypointSet) pick(desiredBearing float64, desiredDistanceM float64, us
 	return set.Nodes[bestIdx].Index, nil
 }
 
-func (g *Graph) loopCandidate(start int, targetM float64, minPavedPercent float64, pavedOnly bool, surfacePolicy string, rng *rand.Rand, waypointSet waypointSet, history historyOverlay, search *searchWorkspace) (localCandidate, error) {
+func (g *Graph) loopCandidate(start int, targetM float64, minPavedPercent float64, pavedOnly bool, surfacePolicy string, rng *rand.Rand, waypointSet waypointSet, history historyOverlay, avoided avoidanceOverlay, search *searchWorkspace) (localCandidate, error) {
 	radiusM := math.Max(600, targetM/(2*math.Pi))
 	baseBearing := rng.Float64() * 2 * math.Pi
 	waypointCount := waypointCountForTarget(targetM, rng)
@@ -888,7 +939,7 @@ func (g *Graph) loopCandidate(start int, targetM float64, minPavedPercent float6
 	sharedConnectorEdges := make(map[edgeKey]struct{})
 	for i := 1; i < len(points); i++ {
 		search.Bounds = bounds
-		path, pathEdges, err := g.shortestPath(points[i-1], points[i], minPavedPercent, pavedOnly, surfacePolicy, usedEdges, history.RecentEdges, search)
+		path, pathEdges, err := g.shortestPath(points[i-1], points[i], minPavedPercent, pavedOnly, surfacePolicy, usedEdges, history.RecentEdges, avoided.RoadsByWayID, search)
 		if err != nil {
 			return localCandidate{}, err
 		}
@@ -904,10 +955,10 @@ func (g *Graph) loopCandidate(start int, targetM float64, minPavedPercent float6
 		return localCandidate{}, errors.New("route path is too short")
 	}
 
-	return buildLocalCandidate(fullPath, edges, targetM, surfacePolicy, sharedConnectorEdges, history)
+	return buildLocalCandidate(fullPath, edges, targetM, surfacePolicy, sharedConnectorEdges, history, avoided)
 }
 
-func (g *Graph) cycleCandidate(start int, targetM float64, minPavedPercent float64, pavedOnly bool, surfacePolicy string, rng *rand.Rand, anchors waypointSet, history historyOverlay, search *searchWorkspace) (localCandidate, error) {
+func (g *Graph) cycleCandidate(start int, targetM float64, minPavedPercent float64, pavedOnly bool, surfacePolicy string, rng *rand.Rand, anchors waypointSet, history historyOverlay, avoided avoidanceOverlay, search *searchWorkspace) (localCandidate, error) {
 	startNode := g.Nodes[start]
 	desiredBearing := rng.Float64() * 2 * math.Pi
 	desiredDistanceM := targetM * (0.28 + rng.Float64()*0.24)
@@ -921,7 +972,7 @@ func (g *Graph) cycleCandidate(start int, targetM float64, minPavedPercent float
 	bounds = bounds.expandToward(startNode, startBearing, targetM*0.35)
 
 	search.Bounds = bounds
-	outPath, outEdges, err := g.shortestPath(start, anchor, minPavedPercent, pavedOnly, surfacePolicy, nil, history.RecentEdges, search)
+	outPath, outEdges, err := g.shortestPath(start, anchor, minPavedPercent, pavedOnly, surfacePolicy, nil, history.RecentEdges, avoided.RoadsByWayID, search)
 	if err != nil {
 		return localCandidate{}, err
 	}
@@ -932,7 +983,7 @@ func (g *Graph) cycleCandidate(start int, targetM float64, minPavedPercent float
 	addBlockedPathEdgesExcept(blocked, outPath, sharedConnectorEdges)
 
 	search.Bounds = bounds
-	backPath, backEdges, err := g.shortestPath(anchor, start, minPavedPercent, pavedOnly, surfacePolicy, blocked, history.RecentEdges, search)
+	backPath, backEdges, err := g.shortestPath(anchor, start, minPavedPercent, pavedOnly, surfacePolicy, blocked, history.RecentEdges, avoided.RoadsByWayID, search)
 	if err != nil {
 		return localCandidate{}, err
 	}
@@ -945,10 +996,10 @@ func (g *Graph) cycleCandidate(start int, targetM float64, minPavedPercent float
 	edges := append([]GraphEdge{}, outEdges...)
 	edges = append(edges, backEdges...)
 
-	return buildLocalCandidate(fullPath, edges, targetM, surfacePolicy, sharedConnectorEdges, history)
+	return buildLocalCandidate(fullPath, edges, targetM, surfacePolicy, sharedConnectorEdges, history, avoided)
 }
 
-func buildLocalCandidate(path []int, edges []GraphEdge, targetM float64, surfacePolicy string, allowedRepeatedEdges map[edgeKey]struct{}, history historyOverlay) (localCandidate, error) {
+func buildLocalCandidate(path []int, edges []GraphEdge, targetM float64, surfacePolicy string, allowedRepeatedEdges map[edgeKey]struct{}, history historyOverlay, avoided avoidanceOverlay) (localCandidate, error) {
 	if len(path) < 2 {
 		return localCandidate{}, errors.New("route path is too short")
 	}
@@ -962,6 +1013,10 @@ func buildLocalCandidate(path []int, edges []GraphEdge, targetM float64, surface
 	if hasRepeatedEdgesExcept(path, allowedRepeatedEdges) {
 		return localCandidate{}, errors.New("route repeats a road segment")
 	}
+	avoidedDistance, err := avoidedRoadDistance(edges, avoided.RoadsByWayID)
+	if err != nil {
+		return localCandidate{}, err
+	}
 	effectivePaved := taggedPaved
 	if surfacePolicy == SurfacePolicyAssumePaved {
 		effectivePaved += unknown
@@ -969,6 +1024,7 @@ func buildLocalCandidate(path []int, edges []GraphEdge, targetM float64, surface
 	previouslyRun := historyDistance(path, edges, history.AllEdges)
 	recentlyRun := historyDistance(path, edges, history.RecentEdges)
 	return localCandidate{
+		Edges:                      edges,
 		Path:                       path,
 		DistanceM:                  total,
 		PavedPercent:               effectivePaved / total * 100,
@@ -978,6 +1034,7 @@ func buildLocalCandidate(path []int, edges []GraphEdge, targetM float64, surface
 		UnrunPercent:               math.Max(0, total-previouslyRun) / total * 100,
 		PreviouslyRunPercent:       previouslyRun / total * 100,
 		RecentPreviouslyRunPercent: recentlyRun / total * 100,
+		AvoidedRoadDistanceM:       avoidedDistance,
 	}, nil
 }
 
@@ -1096,6 +1153,51 @@ func emptyHistoryOverlay() historyOverlay {
 		AllEdges:    make(map[edgeKey]struct{}),
 		RecentEdges: make(map[edgeKey]struct{}),
 	}
+}
+
+func emptyAvoidanceOverlay() avoidanceOverlay {
+	return avoidanceOverlay{RoadsByWayID: map[int64]avoidance.Road{}}
+}
+
+func avoidedRoadDistance(edges []GraphEdge, avoidedWays map[int64]avoidance.Road) (float64, error) {
+	if len(avoidedWays) == 0 {
+		return 0, nil
+	}
+	byWay := make(map[int64]float64)
+	total := 0.0
+	for _, edge := range edges {
+		if edge.OSMWayID == 0 {
+			continue
+		}
+		if _, ok := avoidedWays[edge.OSMWayID]; !ok {
+			continue
+		}
+		byWay[edge.OSMWayID] += edge.Distance
+		total += edge.Distance
+	}
+	for _, distance := range byWay {
+		if distance >= maxAllowedAvoidedRoadM {
+			return total, errors.New("route uses an avoided road for too long")
+		}
+	}
+	return total, nil
+}
+
+func routeSegments(path []int, edges []GraphEdge) []planner.RouteSegment {
+	segments := make([]planner.RouteSegment, 0, len(edges))
+	for idx, edge := range edges {
+		if idx+1 >= len(path) {
+			break
+		}
+		segments = append(segments, planner.RouteSegment{
+			FromIndex: idx,
+			ToIndex:   idx + 1,
+			OSMWayID:  edge.OSMWayID,
+			Name:      edge.Name,
+			DistanceM: round(edge.Distance, 1),
+		})
+	}
+	return segments
 }
 
 func (g *Graph) historyEdges(store *history.Store) (historyOverlay, error) {
@@ -1347,7 +1449,7 @@ func maxAllowedSurfaceWeight(minPavedPercent float64, pavedOnly bool, surfacePol
 	return surfaceWeight(SurfacePaved, minPavedPercent)
 }
 
-func (g *Graph) shortestPath(start int, goal int, minPavedPercent float64, pavedOnly bool, surfacePolicy string, blockedEdges map[edgeKey]struct{}, avoidEdges map[edgeKey]struct{}, search *searchWorkspace) ([]int, []GraphEdge, error) {
+func (g *Graph) shortestPath(start int, goal int, minPavedPercent float64, pavedOnly bool, surfacePolicy string, blockedEdges map[edgeKey]struct{}, avoidEdges map[edgeKey]struct{}, avoidedWays map[int64]avoidance.Road, search *searchWorkspace) ([]int, []GraphEdge, error) {
 	if start == goal {
 		return []int{start}, nil, nil
 	}
@@ -1411,8 +1513,11 @@ func (g *Graph) shortestPath(start int, goal int, minPavedPercent float64, paved
 			if _, avoid := avoidEdges[newEdgeKey(item.Node, edge.To)]; avoid {
 				cost *= recentRoadPenaltyWeight
 			}
+			if _, avoid := avoidedWays[edge.OSMWayID]; avoid {
+				cost *= avoidedRoadPenaltyWeight
+			}
 			next := search.Dist[item.Node] + cost
-			maxCostM := searchMaxCostM(search.Bounds, len(avoidEdges) > 0)
+			maxCostM := searchMaxCostM(search.Bounds, len(avoidEdges) > 0 || len(avoidedWays) > 0)
 			if maxCostM > 0 && next > maxCostM {
 				if stats != nil {
 					stats.CostSkips++
@@ -1458,7 +1563,7 @@ func searchMaxCostM(bounds *routeSearchBounds, avoidingRecentRoads bool) float64
 		return 0
 	}
 	if avoidingRecentRoads {
-		return bounds.MaxCostM * recentRoadPenaltyWeight
+		return bounds.MaxCostM * avoidedRoadPenaltyWeight
 	}
 	return bounds.MaxCostM
 }
@@ -1562,7 +1667,8 @@ func localScore(candidate localCandidate, targetM float64, minPavedPercent float
 	if preferUnrunRoads {
 		historyPenalty = candidate.PreviouslyRunPercent*8 + candidate.RecentPreviouslyRunPercent*45
 	}
-	return shortPenalty + extraPenalty + pavedPenalty + historyPenalty
+	avoidancePenalty := candidate.AvoidedRoadDistanceM * 20
+	return shortPenalty + extraPenalty + pavedPenalty + historyPenalty + avoidancePenalty
 }
 
 func edgeStats(edges []GraphEdge) (total float64, paved float64, unpaved float64, unknown float64) {

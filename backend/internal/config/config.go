@@ -18,6 +18,7 @@ type Config struct {
 	OSMRadiusKm        float64
 	AllowOSMDownload   bool
 	HistoryDataDir     string
+	AvoidanceDataDir   string
 	StravaClientID     string
 	StravaClientSecret string
 	StravaRedirectURL  string
@@ -37,6 +38,7 @@ func Load() Config {
 		OSMRadiusKm:        getEnvFloat("OSM_RADIUS_KM", 20),
 		AllowOSMDownload:   getEnvBool("ALLOW_OSM_DOWNLOAD", true),
 		HistoryDataDir:     getEnv("HISTORY_DATA_DIR", "data/history"),
+		AvoidanceDataDir:   getEnv("AVOIDANCE_DATA_DIR", "data/avoidance"),
 		StravaClientID:     os.Getenv("STRAVA_CLIENT_ID"),
 		StravaClientSecret: os.Getenv("STRAVA_CLIENT_SECRET"),
 		StravaRedirectURL:  getEnv("STRAVA_REDIRECT_URL", "http://localhost:8080/api/strava/callback"),

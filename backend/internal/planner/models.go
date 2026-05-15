@@ -34,18 +34,20 @@ type GenerateRouteRequest struct {
 }
 
 type RouteResponse struct {
-	RouteID               string      `json:"routeId"`
-	Start                 Coordinate  `json:"start"`
-	DistanceKm            float64     `json:"distanceKm"`
-	DurationMinutes       float64     `json:"durationMinutes"`
-	Geometry              GeoJSONLine `json:"geometry"`
-	PavedPercent          *float64    `json:"pavedPercent,omitempty"`
-	UnpavedPercent        *float64    `json:"unpavedPercent,omitempty"`
-	UnknownSurfacePercent *float64    `json:"unknownSurfacePercent,omitempty"`
-	UnrunPercent          *float64    `json:"unrunPercent,omitempty"`
-	PreviouslyRunPercent  *float64    `json:"previouslyRunPercent,omitempty"`
-	Provider              string      `json:"provider"`
-	Warnings              []string    `json:"warnings,omitempty"`
+	RouteID               string         `json:"routeId"`
+	Start                 Coordinate     `json:"start"`
+	DistanceKm            float64        `json:"distanceKm"`
+	DurationMinutes       float64        `json:"durationMinutes"`
+	Geometry              GeoJSONLine    `json:"geometry"`
+	PavedPercent          *float64       `json:"pavedPercent,omitempty"`
+	UnpavedPercent        *float64       `json:"unpavedPercent,omitempty"`
+	UnknownSurfacePercent *float64       `json:"unknownSurfacePercent,omitempty"`
+	UnrunPercent          *float64       `json:"unrunPercent,omitempty"`
+	PreviouslyRunPercent  *float64       `json:"previouslyRunPercent,omitempty"`
+	AvoidedRoadDistanceM  *float64       `json:"avoidedRoadDistanceM,omitempty"`
+	Segments              []RouteSegment `json:"segments,omitempty"`
+	Provider              string         `json:"provider"`
+	Warnings              []string       `json:"warnings,omitempty"`
 }
 
 type GeoJSONLine struct {
@@ -74,6 +76,16 @@ type CandidateRoute struct {
 	UnknownPercent       *float64
 	UnrunPercent         *float64
 	PreviouslyRunPercent *float64
+	AvoidedRoadDistanceM *float64
+	Segments             []RouteSegment
 	Provider             string
 	Warnings             []string
+}
+
+type RouteSegment struct {
+	FromIndex int     `json:"fromIndex"`
+	ToIndex   int     `json:"toIndex"`
+	OSMWayID  int64   `json:"osmWayId,omitempty"`
+	Name      string  `json:"name,omitempty"`
+	DistanceM float64 `json:"distanceM"`
 }

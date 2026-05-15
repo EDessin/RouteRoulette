@@ -53,13 +53,41 @@ export interface RouteResponse {
   distanceKm: number;
   durationMinutes: number;
   geometry: GeoJsonLineString;
+  segments?: RouteSegment[];
   pavedPercent?: number;
   unpavedPercent?: number;
   unknownSurfacePercent?: number;
   unrunPercent?: number;
   previouslyRunPercent?: number;
+  avoidedRoadDistanceM?: number;
   provider: string;
   warnings?: string[];
+}
+
+export interface RouteSegment {
+  fromIndex: number;
+  toIndex: number;
+  osmWayId?: number;
+  name?: string;
+  distanceM: number;
+}
+
+export interface AvoidedRoad {
+  id: string;
+  osmWayId: number;
+  name?: string;
+  reason: AvoidanceReason;
+  coordinate: Coordinate;
+  createdAt: string;
+}
+
+export type AvoidanceReason = 'busy_road' | 'no_lights' | 'other';
+
+export interface AddAvoidedRoadRequest {
+  osmWayId: number;
+  name?: string;
+  reason: AvoidanceReason;
+  coordinate: Coordinate;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -84,5 +112,17 @@ export class RouteApiService {
 
   clearHistory(): Observable<{ status: string }> {
     return this.http.delete<{ status: string }>('/api/history');
+  }
+
+  getAvoidedRoads(): Observable<AvoidedRoad[]> {
+    return this.http.get<AvoidedRoad[]>('/api/avoidance');
+  }
+
+  addAvoidedRoad(request: AddAvoidedRoadRequest): Observable<AvoidedRoad> {
+    return this.http.post<AvoidedRoad>('/api/avoidance', request);
+  }
+
+  deleteAvoidedRoad(id: string): Observable<{ status: string }> {
+    return this.http.delete<{ status: string }>(`/api/avoidance/${encodeURIComponent(id)}`);
   }
 }

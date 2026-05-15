@@ -7,6 +7,8 @@ backend/data/osm/*
 !backend/data/osm/.gitkeep
 backend/data/history/*
 !backend/data/history/.gitkeep
+backend/data/avoidance/*
+!backend/data/avoidance/.gitkeep
 
 # Angular / Node
 frontend/.angular/

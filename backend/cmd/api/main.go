@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/EDessin/RouteRoulette/backend/internal/api"
+	"github.com/EDessin/RouteRoulette/backend/internal/avoidance"
 	"github.com/EDessin/RouteRoulette/backend/internal/config"
 	"github.com/EDessin/RouteRoulette/backend/internal/history"
 	"github.com/EDessin/RouteRoulette/backend/internal/localosm"
@@ -18,6 +19,7 @@ func main() {
 	cfg := config.Load()
 
 	historyStore := history.NewStore(cfg.HistoryDataDir)
+	avoidanceStore := avoidance.NewStore(cfg.AvoidanceDataDir)
 	stravaClient := strava.NewClient(strava.Config{
 		ClientID:     cfg.StravaClientID,
 		ClientSecret: cfg.StravaClientSecret,
@@ -28,16 +30,17 @@ func main() {
 	routeProvider := planner.RouteProvider(orsClient)
 	if cfg.RoutingProvider == "local_osm" {
 		routeProvider = localosm.NewProvider(localosm.Config{
-			DataDir:       cfg.OSMDataDir,
-			ExtractPath:   cfg.OSMExtractPath,
-			ExtractURL:    cfg.OSMExtractURL,
-			RadiusKm:      cfg.OSMRadiusKm,
-			AllowDownload: cfg.AllowOSMDownload,
-			HistoryStore:  &historyStore,
+			DataDir:        cfg.OSMDataDir,
+			ExtractPath:    cfg.OSMExtractPath,
+			ExtractURL:     cfg.OSMExtractURL,
+			RadiusKm:       cfg.OSMRadiusKm,
+			AllowDownload:  cfg.AllowOSMDownload,
+			HistoryStore:   &historyStore,
+			AvoidanceStore: &avoidanceStore,
 		})
 	}
 	routePlanner := planner.New(routeProvider, cfg.AllowMockRoutes)
-	server := api.NewServer(cfg, routePlanner, orsClient, stravaClient, &historyStore)
+	server := api.NewServer(cfg, routePlanner, orsClient, stravaClient, &historyStore, &avoidanceStore)
 
 	log.Printf("RouteRoulette API listening on :%s", cfg.Port)
 	log.Printf("Routing provider: %s", cfg.RoutingProvider)

@@ -68,6 +68,53 @@
   gap: 0.5rem 0.75rem;
 }
 
+.avoidance-panel {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.875rem;
+  border: 1px solid #d9e2db;
+  border-radius: 8px;
+  background: #fbfdfc;
+}
+
+.avoidance-panel > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.avoidance-panel span,
+.avoidance-panel small {
+  color: #617066;
+  font-size: 0.85rem;
+}
+
+.avoidance-panel ul {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.avoidance-panel li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.avoidance-panel li > span {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.avoidance-panel strong {
+  color: #17201b;
+  overflow-wrap: anywhere;
+}
+
 h1 {
   margin: 0;
   font-size: 1.5rem;
@@ -182,6 +229,32 @@ p {
   border-radius: 8px;
   background: #fff7ed;
   color: #7c2d12;
+}
+
+.avoid-dialog {
+  display: grid;
+  gap: 1rem;
+}
+
+.avoid-dialog > div:first-child {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.avoid-dialog > div:first-child span {
+  color: #617066;
+  font-size: 0.85rem;
+}
+
+.avoid-dialog > div:first-child strong {
+  color: #17201b;
+  overflow-wrap: anywhere;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
 }
 
 .map-panel {

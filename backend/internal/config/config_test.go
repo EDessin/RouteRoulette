@@ -5,6 +5,7 @@ import "testing"
 func TestLoadDefaultsToTwentyKilometerOSMRadius(t *testing.T) {
 	t.Setenv("OSM_RADIUS_KM", "")
 	t.Setenv("HISTORY_DATA_DIR", "")
+	t.Setenv("AVOIDANCE_DATA_DIR", "")
 	t.Setenv("STRAVA_REDIRECT_URL", "")
 
 	cfg := Load()
@@ -13,6 +14,9 @@ func TestLoadDefaultsToTwentyKilometerOSMRadius(t *testing.T) {
 	}
 	if cfg.HistoryDataDir != "data/history" {
 		t.Fatalf("HistoryDataDir = %q, want data/history", cfg.HistoryDataDir)
+	}
+	if cfg.AvoidanceDataDir != "data/avoidance" {
+		t.Fatalf("AvoidanceDataDir = %q, want data/avoidance", cfg.AvoidanceDataDir)
 	}
 	if cfg.StravaRedirectURL != "http://localhost:8080/api/strava/callback" {
 		t.Fatalf("StravaRedirectURL = %q, want default callback", cfg.StravaRedirectURL)

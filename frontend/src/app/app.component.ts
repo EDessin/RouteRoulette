@@ -5,6 +5,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import * as L from 'leaflet';
 import { ButtonModule } from 'primeng/button';
 import { CheckboxModule } from 'primeng/checkbox';
+import { DialogModule } from 'primeng/dialog';
 import { InputNumberModule } from 'primeng/inputnumber';
 import { InputTextModule } from 'primeng/inputtext';
 import { MessageModule } from 'primeng/message';
@@ -12,7 +13,15 @@ import { ProgressSpinnerModule } from 'primeng/progressspinner';
 import { SelectButtonModule } from 'primeng/selectbutton';
 import { SliderModule } from 'primeng/slider';
 import { TagModule } from 'primeng/tag';
-import { Coordinate, HistoryStatus, RouteApiService, RouteResponse } from './route-api.service';
+import {
+  AvoidanceReason,
+  AvoidedRoad,
+  Coordinate,
+  HistoryStatus,
+  RouteApiService,
+  RouteResponse,
+  RouteSegment,
+} from './route-api.service';
 
 @Component({
   selector: 'app-root',
@@ -21,6 +30,7 @@ import { Coordinate, HistoryStatus, RouteApiService, RouteResponse } from './rou
     ButtonModule,
     CheckboxModule,
     CommonModule,
+    DialogModule,
     FormsModule,
     InputNumberModule,
     InputTextModule,
@@ -52,16 +62,28 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
 
   route?: RouteResponse;
   historyStatus?: HistoryStatus;
+  avoidedRoads: AvoidedRoad[] = [];
   errorMessage = '';
   historyMessage = '';
+  avoidanceMessage = '';
   isGenerating = false;
   isSyncingHistory = false;
+  isSavingAvoidedRoad = false;
+  avoidDialogVisible = false;
+  selectedSegment?: RouteSegment;
+  selectedSegmentCoordinate?: Coordinate;
+  selectedAvoidanceReason: AvoidanceReason = 'busy_road';
+  avoidanceReasonOptions = [
+    { label: 'Busy road', value: 'busy_road' },
+    { label: 'No lights', value: 'no_lights' },
+    { label: 'Other', value: 'other' },
+  ];
 
   private homeLat = 50.9950381;
   private homeLon = 4.7699273;
   private map?: L.Map;
   private routeRenderer?: L.Renderer;
-  private routeLayer?: L.Polyline;
+  private routeLayer?: L.LayerGroup;
   private homeMarker?: L.CircleMarker;
   private startMarker?: L.CircleMarker;
 
@@ -69,6 +91,7 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
 
   ngOnInit(): void {
     this.loadHistoryStatus();
+    this.loadAvoidedRoads();
   }
 
   ngAfterViewInit(): void {
@@ -141,6 +164,50 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
     });
   }
 
+  saveAvoidedRoad(): void {
+    if (!this.selectedSegment?.osmWayId || !this.selectedSegmentCoordinate) {
+      this.errorMessage = 'This route segment does not have road metadata and cannot be avoided yet.';
+      return;
+    }
+
+    this.errorMessage = '';
+    this.avoidanceMessage = '';
+    this.isSavingAvoidedRoad = true;
+    this.routeApi
+      .addAvoidedRoad({
+        osmWayId: this.selectedSegment.osmWayId,
+        name: this.selectedSegment.name,
+        reason: this.selectedAvoidanceReason,
+        coordinate: this.selectedSegmentCoordinate,
+      })
+      .subscribe({
+        next: () => {
+          this.isSavingAvoidedRoad = false;
+          this.avoidDialogVisible = false;
+          this.avoidanceMessage = 'Road added to your avoid list.';
+          this.loadAvoidedRoads();
+        },
+        error: (err: HttpErrorResponse) => {
+          this.isSavingAvoidedRoad = false;
+          this.errorMessage = this.errorText(err);
+        },
+      });
+  }
+
+  removeAvoidedRoad(road: AvoidedRoad): void {
+    this.errorMessage = '';
+    this.avoidanceMessage = '';
+    this.routeApi.deleteAvoidedRoad(road.id).subscribe({
+      next: () => {
+        this.avoidanceMessage = 'Road removed from your avoid list.';
+        this.loadAvoidedRoads();
+      },
+      error: (err: HttpErrorResponse) => {
+        this.errorMessage = this.errorText(err);
+      },
+    });
+  }
+
   generateRoute(): void {
     if (!this.isValidForm()) {
       this.errorMessage = 'Check the home address, route length, start radius, pace, and paved percentage.';
@@ -198,6 +265,7 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
         next: (route) => {
           this.route = route;
           this.isGenerating = false;
+          this.avoidanceMessage = '';
           this.drawRoute(route);
         },
         error: (err: HttpErrorResponse) => {
@@ -221,6 +289,17 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
       },
       error: () => {
         this.historyStatus = undefined;
+      },
+    });
+  }
+
+  private loadAvoidedRoads(): void {
+    this.routeApi.getAvoidedRoads().subscribe({
+      next: (roads) => {
+        this.avoidedRoads = roads;
+      },
+      error: () => {
+        this.avoidedRoads = [];
       },
     });
   }
@@ -252,13 +331,34 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
     this.routeLayer?.remove();
     this.startMarker?.remove();
 
-    this.routeLayer = L.polyline(latLngs, {
+    const group = L.layerGroup().addTo(this.map);
+
+    L.polyline(latLngs, {
       color: '#f97316',
       weight: 5,
       opacity: 0.95,
       lineJoin: 'round',
       renderer: this.routeRenderer,
-    }).addTo(this.map);
+    }).addTo(group);
+
+    for (const segment of route.segments || []) {
+      const from = latLngs[segment.fromIndex];
+      const to = latLngs[segment.toIndex];
+      if (!from || !to || !segment.osmWayId) {
+        continue;
+      }
+      L.polyline([from, to], {
+        color: '#0f172a',
+        weight: 18,
+        opacity: 0.01,
+        interactive: true,
+        renderer: this.routeRenderer,
+      })
+        .on('click', (event: L.LeafletMouseEvent) => this.openAvoidDialog(segment, event.latlng))
+        .addTo(group);
+    }
+
+    this.routeLayer = group;
 
     this.startMarker = L.circleMarker([route.start.lat, route.start.lon], {
       radius: 7,
@@ -270,10 +370,17 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
     this.startMarker.bindTooltip('Start');
 
     this.drawHomeMarker();
-    this.map.fitBounds(this.routeLayer.getBounds(), {
+    this.map.fitBounds(L.latLngBounds(latLngs), {
       padding: [32, 32],
       maxZoom: 15,
     });
+  }
+
+  private openAvoidDialog(segment: RouteSegment, latLng: L.LatLng): void {
+    this.selectedSegment = segment;
+    this.selectedSegmentCoordinate = { lat: latLng.lat, lon: latLng.lng };
+    this.selectedAvoidanceReason = 'busy_road';
+    this.avoidDialogVisible = true;
   }
 
   private routeToGpx(route: RouteResponse): string {
@@ -331,5 +438,16 @@ ${trackPoints}
       return err.error.error;
     }
     return 'Route generation failed. Check that the Go API is running and configured.';
+  }
+
+  reasonLabel(reason: AvoidanceReason): string {
+    switch (reason) {
+      case 'busy_road':
+        return 'Busy road';
+      case 'no_lights':
+        return 'No lights';
+      default:
+        return 'Other';
+    }
   }
 }

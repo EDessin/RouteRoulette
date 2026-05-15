@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/EDessin/RouteRoulette/backend/internal/avoidance"
 	"github.com/EDessin/RouteRoulette/backend/internal/config"
 	"github.com/EDessin/RouteRoulette/backend/internal/history"
 	"github.com/EDessin/RouteRoulette/backend/internal/planner"
@@ -48,6 +50,7 @@ func TestHistoryStatusAndStravaSyncEndpoints(t *testing.T) {
 
 	dir := t.TempDir()
 	historyStore := history.NewStore(dir)
+	avoidanceStore := avoidance.NewStore(t.TempDir())
 	stravaClient := strava.NewClient(strava.Config{
 		ClientID:     "id",
 		ClientSecret: "secret",
@@ -62,7 +65,7 @@ func TestHistoryStatusAndStravaSyncEndpoints(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveToken() returned error: %v", err)
 	}
-	server := NewServer(config.Config{}, fakePlanner{}, fakeGeocoder{}, stravaClient, &historyStore)
+	server := NewServer(config.Config{}, fakePlanner{}, fakeGeocoder{}, stravaClient, &historyStore, &avoidanceStore)
 
 	statusResp := httptest.NewRecorder()
 	server.Routes().ServeHTTP(statusResp, httptest.NewRequest(http.MethodGet, "/api/history/status", nil))
@@ -93,5 +96,37 @@ func TestHistoryStatusAndStravaSyncEndpoints(t *testing.T) {
 	}
 	if streamCalls != 1 {
 		t.Fatalf("streamCalls after second sync = %d, want no refetch", streamCalls)
+	}
+}
+
+func TestAvoidanceEndpoints(t *testing.T) {
+	historyStore := history.NewStore(t.TempDir())
+	avoidanceStore := avoidance.NewStore(t.TempDir())
+	server := NewServer(config.Config{}, fakePlanner{}, fakeGeocoder{}, strava.Client{}, &historyStore, &avoidanceStore)
+
+	addResp := httptest.NewRecorder()
+	addReq := httptest.NewRequest(http.MethodPost, "/api/avoidance", strings.NewReader(`{"osmWayId":42,"name":"Busy Lane","reason":"busy_road","coordinate":{"lat":50.1,"lon":4.7}}`))
+	server.Routes().ServeHTTP(addResp, addReq)
+	if addResp.Code != http.StatusCreated {
+		t.Fatalf("avoidance add code = %d, want 201; body %s", addResp.Code, addResp.Body.String())
+	}
+
+	listResp := httptest.NewRecorder()
+	server.Routes().ServeHTTP(listResp, httptest.NewRequest(http.MethodGet, "/api/avoidance", nil))
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("avoidance list code = %d, want 200", listResp.Code)
+	}
+	var roads []avoidance.Road
+	if err := json.NewDecoder(listResp.Body).Decode(&roads); err != nil {
+		t.Fatalf("decode roads: %v", err)
+	}
+	if len(roads) != 1 || roads[0].ID != "way:42" {
+		t.Fatalf("roads = %+v, want way:42", roads)
+	}
+
+	deleteResp := httptest.NewRecorder()
+	server.Routes().ServeHTTP(deleteResp, httptest.NewRequest(http.MethodDelete, "/api/avoidance/way%3A42", nil))
+	if deleteResp.Code != http.StatusOK {
+		t.Fatalf("avoidance delete code = %d, want 200", deleteResp.Code)
 	}
 }

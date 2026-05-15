@@ -7,6 +7,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/EDessin/RouteRoulette/backend/internal/avoidance"
 	"github.com/EDessin/RouteRoulette/backend/internal/history"
 	"github.com/EDessin/RouteRoulette/backend/internal/planner"
 )
@@ -56,6 +57,7 @@ func TestLoadGraphKeepsDiskCacheInMemory(t *testing.T) {
 	})
 	home := planner.Coordinate{Lat: 1, Lon: 2}
 	graph := &Graph{
+		Version:  graphCacheVersion,
 		Home:     home,
 		RadiusKm: 50,
 		Nodes: []GraphNode{
@@ -296,7 +298,7 @@ func TestCycleCandidateBuildsDisjointCycle(t *testing.T) {
 		Degree:  graph.usableDegree(1, true, SurfacePolicyStrict),
 	}
 
-	candidate, err := graph.cycleCandidate(0, 3900, 70, true, SurfacePolicyStrict, rand.New(rand.NewSource(1)), waypointSet{Nodes: []waypointNode{anchor}}, emptyHistoryOverlay(), graph.newSearchWorkspace())
+	candidate, err := graph.cycleCandidate(0, 3900, 70, true, SurfacePolicyStrict, rand.New(rand.NewSource(1)), waypointSet{Nodes: []waypointNode{anchor}}, emptyHistoryOverlay(), emptyAvoidanceOverlay(), graph.newSearchWorkspace())
 	if err != nil {
 		t.Fatalf("cycleCandidate() returned error: %v", err)
 	}
@@ -371,6 +373,44 @@ func TestHistoryDistanceCountsPreviouslyRunEdges(t *testing.T) {
 	}
 }
 
+func TestAvoidedRoadDistanceAllowsShortUsage(t *testing.T) {
+	distance, err := avoidedRoadDistance([]GraphEdge{
+		{Distance: 49, OSMWayID: 7},
+	}, map[int64]avoidance.Road{
+		7: {OSMWayID: 7},
+	})
+	if err != nil {
+		t.Fatalf("avoidedRoadDistance() returned error: %v", err)
+	}
+	if distance != 49 {
+		t.Fatalf("avoidedRoadDistance() = %.0f, want 49", distance)
+	}
+}
+
+func TestAvoidedRoadDistanceRejectsLongUsage(t *testing.T) {
+	if _, err := avoidedRoadDistance([]GraphEdge{
+		{Distance: 25, OSMWayID: 7},
+		{Distance: 25, OSMWayID: 7},
+	}, map[int64]avoidance.Road{
+		7: {OSMWayID: 7},
+	}); err == nil {
+		t.Fatal("expected avoided road usage of 50 meters to be rejected")
+	}
+}
+
+func TestRouteSegmentsExposeRoadMetadata(t *testing.T) {
+	segments := routeSegments([]int{0, 1}, []GraphEdge{
+		{Distance: 42.04, OSMWayID: 99, Name: "Busy Lane"},
+	})
+
+	if len(segments) != 1 {
+		t.Fatalf("routeSegments() length = %d, want 1", len(segments))
+	}
+	if segments[0].FromIndex != 0 || segments[0].ToIndex != 1 || segments[0].OSMWayID != 99 || segments[0].Name != "Busy Lane" {
+		t.Fatalf("routeSegments() = %+v, want segment metadata", segments[0])
+	}
+}
+
 func TestHistoryOverlayTracksLastTenActivitiesSeparately(t *testing.T) {
 	graph := Graph{
 		Nodes: make([]GraphNode, 0, 22),
@@ -441,7 +481,7 @@ func TestShortestPathSkipsUnpavedEdgesWhenPavedOnly(t *testing.T) {
 		},
 	}
 
-	path, edges, err := graph.shortestPath(0, 1, 70, true, SurfacePolicyStrict, nil, nil, graph.newSearchWorkspace())
+	path, edges, err := graph.shortestPath(0, 1, 70, true, SurfacePolicyStrict, nil, nil, nil, graph.newSearchWorkspace())
 	if err != nil {
 		t.Fatalf("shortestPath() returned error: %v", err)
 	}
@@ -473,7 +513,7 @@ func TestShortestPathAvoidsBlockedRoadSegments(t *testing.T) {
 		newEdgeKey(0, 1): {},
 	}
 
-	path, _, err := graph.shortestPath(0, 1, 70, true, SurfacePolicyStrict, blocked, nil, graph.newSearchWorkspace())
+	path, _, err := graph.shortestPath(0, 1, 70, true, SurfacePolicyStrict, blocked, nil, nil, graph.newSearchWorkspace())
 	if err != nil {
 		t.Fatalf("shortestPath() returned error: %v", err)
 	}
@@ -503,7 +543,7 @@ func TestShortestPathPenalizesRecentlyRunRoadSegments(t *testing.T) {
 		newEdgeKey(0, 1): {},
 	}
 
-	path, _, err := graph.shortestPath(0, 1, 70, true, SurfacePolicyStrict, nil, recent, graph.newSearchWorkspace())
+	path, _, err := graph.shortestPath(0, 1, 70, true, SurfacePolicyStrict, nil, recent, nil, graph.newSearchWorkspace())
 	if err != nil {
 		t.Fatalf("shortestPath() returned error: %v", err)
 	}
@@ -524,7 +564,7 @@ func TestShortestPathReturnsErrorWhenNoPavedPathExists(t *testing.T) {
 		},
 	}
 
-	if _, _, err := graph.shortestPath(0, 1, 70, true, SurfacePolicyStrict, nil, nil, graph.newSearchWorkspace()); err == nil {
+	if _, _, err := graph.shortestPath(0, 1, 70, true, SurfacePolicyStrict, nil, nil, nil, graph.newSearchWorkspace()); err == nil {
 		t.Fatal("expected no paved-only path to return an error")
 	}
 }
@@ -541,7 +581,7 @@ func TestShortestPathAllowsUnknownSurfaceWhenAssumingNormalRoadsPaved(t *testing
 		},
 	}
 
-	path, _, err := graph.shortestPath(0, 1, 70, true, SurfacePolicyAssumePaved, nil, nil, graph.newSearchWorkspace())
+	path, _, err := graph.shortestPath(0, 1, 70, true, SurfacePolicyAssumePaved, nil, nil, nil, graph.newSearchWorkspace())
 	if err != nil {
 		t.Fatalf("shortestPath() returned error: %v", err)
 	}

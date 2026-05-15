@@ -40,6 +40,35 @@
       </div>
     </section>
 
+    <section class="avoidance-panel" aria-label="Avoided roads">
+      <div>
+        <strong>Avoided roads</strong>
+        <span>{{ avoidedRoads.length }} saved</span>
+      </div>
+      @if (avoidedRoads.length > 0) {
+        <ul>
+          @for (road of avoidedRoads; track road.id) {
+            <li>
+              <span>
+                <strong>{{ road.name || 'Unnamed road' }}</strong>
+                <small>{{ reasonLabel(road.reason) }}</small>
+              </span>
+              <button
+                pButton
+                type="button"
+                icon="pi pi-times"
+                severity="secondary"
+                [rounded]="true"
+                [text]="true"
+                (click)="removeAvoidedRoad(road)"
+                [attr.aria-label]="'Remove ' + (road.name || 'road')"
+              ></button>
+            </li>
+          }
+        </ul>
+      }
+    </section>
+
     <form class="route-form" (ngSubmit)="generateRoute()">
       <label class="field">
         <span>Home address</span>
@@ -156,6 +185,10 @@
       <p-message severity="success" [text]="historyMessage" />
     }
 
+    @if (avoidanceMessage) {
+      <p-message severity="success" [text]="avoidanceMessage" />
+    }
+
     @if (route) {
       <section class="summary" aria-label="Route summary">
         <div class="summary-wide">
@@ -200,6 +233,12 @@
             <strong>{{ route.previouslyRunPercent | number: '1.0-0' }}%</strong>
           </div>
         }
+        @if (route.avoidedRoadDistanceM !== undefined && route.avoidedRoadDistanceM > 0) {
+          <div>
+            <span>Avoided roads</span>
+            <strong>{{ route.avoidedRoadDistanceM | number: '1.0-0' }} m</strong>
+          </div>
+        }
         <p-tag [value]="route.provider" severity="secondary" />
       </section>
       <button
@@ -231,3 +270,41 @@
     }
   </section>
 </main>
+
+<p-dialog
+  header="Avoid this road"
+  [(visible)]="avoidDialogVisible"
+  [modal]="true"
+  [draggable]="false"
+  [resizable]="false"
+  [style]="{ width: 'min(28rem, calc(100vw - 2rem))' }"
+>
+  <div class="avoid-dialog">
+    <div>
+      <span>Road</span>
+      <strong>{{ selectedSegment?.name || 'Unnamed road' }}</strong>
+    </div>
+    <label class="field">
+      <span>Reason</span>
+      <p-selectbutton
+        [(ngModel)]="selectedAvoidanceReason"
+        name="selectedAvoidanceReason"
+        [options]="avoidanceReasonOptions"
+        optionLabel="label"
+        optionValue="value"
+        [allowEmpty]="false"
+      />
+    </label>
+    <div class="dialog-actions">
+      <button pButton type="button" label="Cancel" severity="secondary" (click)="avoidDialogVisible = false"></button>
+      <button
+        pButton
+        type="button"
+        icon="pi pi-ban"
+        label="Avoid road"
+        [loading]="isSavingAvoidedRoad"
+        (click)="saveAvoidedRoad()"
+      ></button>
+    </div>
+  </div>
+</p-dialog>

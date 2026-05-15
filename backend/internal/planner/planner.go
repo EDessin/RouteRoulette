@@ -193,6 +193,8 @@ func routeResponse(route CandidateRoute, req GenerateRouteRequest, warnings []st
 		UnknownSurfacePercent: route.UnknownPercent,
 		UnrunPercent:          route.UnrunPercent,
 		PreviouslyRunPercent:  route.PreviouslyRunPercent,
+		AvoidedRoadDistanceM:  route.AvoidedRoadDistanceM,
+		Segments:              route.Segments,
 		Provider:              route.Provider,
 		Warnings:              allWarnings,
 	}
