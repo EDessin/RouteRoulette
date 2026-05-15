@@ -330,6 +330,40 @@ func TestCycleCandidateBuildsDisjointCycle(t *testing.T) {
 	}
 }
 
+func TestBlockLoopCandidateBuildsCompactDisjointCycle(t *testing.T) {
+	graph := Graph{
+		Nodes: []GraphNode{
+			{Lat: 0, Lon: 0},
+			{Lat: 0, Lon: 0.014},
+			{Lat: 0.006, Lon: 0.007},
+			{Lat: -0.006, Lon: 0.007},
+		},
+		Edges: make([][]GraphEdge, 4),
+	}
+	addTestEdge(&graph, 0, 2, SurfacePaved)
+	addTestEdge(&graph, 2, 1, SurfacePaved)
+	addTestEdge(&graph, 0, 3, SurfaceUnknown)
+	addTestEdge(&graph, 3, 1, SurfaceUnpaved)
+
+	anchor := waypointNode{
+		Index:   1,
+		Bearing: bearingRadians(graph.Nodes[0].Lat, graph.Nodes[0].Lon, graph.Nodes[1].Lat, graph.Nodes[1].Lon),
+		DistM:   distanceM(graph.Nodes[0].Lat, graph.Nodes[0].Lon, graph.Nodes[1].Lat, graph.Nodes[1].Lon),
+		Degree:  graph.usableDegree(1, false, SurfacePolicyStrict),
+	}
+
+	candidate, err := graph.blockLoopCandidate(0, 3900, 0, false, SurfacePolicyStrict, rand.New(rand.NewSource(1)), waypointSet{Nodes: []waypointNode{anchor}}, emptyHistoryOverlay(), emptyAvoidanceOverlay(), graph.newSearchWorkspace())
+	if err != nil {
+		t.Fatalf("blockLoopCandidate() returned error: %v", err)
+	}
+	if candidate.DistanceM < 3900 || candidate.DistanceM > 4400 {
+		t.Fatalf("blockLoopCandidate() distance = %.0f, want 3900..4400", candidate.DistanceM)
+	}
+	if hasRepeatedEdges(candidate.Path) {
+		t.Fatalf("blockLoopCandidate() repeated a road segment in path %v", candidate.Path)
+	}
+}
+
 func TestLoopCandidateBuildsShortRouteWhenPavingAndHistoryAreDisabled(t *testing.T) {
 	graph := Graph{
 		Nodes: []GraphNode{
@@ -383,6 +417,9 @@ func TestHomeConnectorEdgesUseSegmentsNearStart(t *testing.T) {
 func TestWaypointCountUsesMoreStopsForLongRoutes(t *testing.T) {
 	if got := waypointCountForTarget(2000, rand.New(rand.NewSource(1))); got != 2 {
 		t.Fatalf("waypointCountForTarget(2000) = %d, want 2", got)
+	}
+	if got := waypointCountForTarget(5000, rand.New(rand.NewSource(1))); got != 2 {
+		t.Fatalf("waypointCountForTarget(5000) = %d, want 2", got)
 	}
 	if got := waypointCountForTarget(8000, rand.New(rand.NewSource(1))); got != 3 {
 		t.Fatalf("waypointCountForTarget(8000) = %d, want 3", got)
