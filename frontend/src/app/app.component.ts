@@ -371,10 +371,20 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
     this.startMarker.bindTooltip('Start');
 
     this.drawHomeMarker();
-    this.map.fitBounds(L.latLngBounds(latLngs), {
+    this.map.fitBounds(this.homeCenteredRouteBounds(latLngs), {
       padding: [32, 32],
       maxZoom: 15,
     });
+  }
+
+  private homeCenteredRouteBounds(latLngs: L.LatLngTuple[]): L.LatLngBounds {
+    const home = L.latLng(this.homeLat, this.homeLon);
+    const bounds = L.latLngBounds([home]);
+    for (const [lat, lon] of latLngs) {
+      bounds.extend([lat, lon]);
+      bounds.extend([2 * home.lat - lat, 2 * home.lng - lon]);
+    }
+    return bounds;
   }
 
   private openAvoidDialog(segment: RouteSegment, latLng: L.LatLng): void {
