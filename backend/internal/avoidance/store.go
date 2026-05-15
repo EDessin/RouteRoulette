@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	ReasonBusyRoad = "busy_road"
-	ReasonNoLights = "no_lights"
-	ReasonOther    = "other"
+	ReasonBusyRoad      = "busy_road"
+	ReasonNoLights      = "no_lights"
+	ReasonNotAccessible = "not_accessible"
+	ReasonOther         = "other"
 )
 
 type Store struct {
@@ -66,7 +67,7 @@ func (s *Store) Add(req AddRoadRequest) (Road, error) {
 	}
 	reason := normalizeReason(req.Reason)
 	if reason == "" {
-		return Road{}, errors.New("reason must be busy_road, no_lights, or other")
+		return Road{}, errors.New("reason must be busy_road, no_lights, not_accessible, or other")
 	}
 
 	s.mu.Lock()
@@ -143,7 +144,7 @@ func ByWayID(roads []Road) map[int64]Road {
 
 func normalizeReason(value string) string {
 	switch strings.TrimSpace(value) {
-	case ReasonBusyRoad, ReasonNoLights, ReasonOther:
+	case ReasonBusyRoad, ReasonNoLights, ReasonNotAccessible, ReasonOther:
 		return strings.TrimSpace(value)
 	default:
 		return ""

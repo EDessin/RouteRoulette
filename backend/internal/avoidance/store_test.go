@@ -52,6 +52,18 @@ func TestStoreRejectsUnknownReasons(t *testing.T) {
 	}
 }
 
+func TestStoreAcceptsNotAccessibleReason(t *testing.T) {
+	store := NewStore(t.TempDir())
+
+	road, err := store.Add(AddRoadRequest{OSMWayID: 123, Reason: ReasonNotAccessible})
+	if err != nil {
+		t.Fatalf("Add() returned error: %v", err)
+	}
+	if road.Reason != ReasonNotAccessible {
+		t.Fatalf("road reason = %q, want %q", road.Reason, ReasonNotAccessible)
+	}
+}
+
 func TestStoreDeleteMissingRoadReturnsNotExist(t *testing.T) {
 	store := NewStore(t.TempDir())
 

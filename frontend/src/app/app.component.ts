@@ -76,6 +76,7 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
   avoidanceReasonOptions = [
     { label: 'Busy road', value: 'busy_road' },
     { label: 'No lights', value: 'no_lights' },
+    { label: 'Not accessible', value: 'not_accessible' },
     { label: 'Other', value: 'other' },
   ];
 
@@ -446,6 +447,8 @@ ${trackPoints}
         return 'Busy road';
       case 'no_lights':
         return 'No lights';
+      case 'not_accessible':
+        return 'Not accessible';
       default:
         return 'Other';
     }

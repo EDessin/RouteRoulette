@@ -81,7 +81,7 @@ export interface AvoidedRoad {
   createdAt: string;
 }
 
-export type AvoidanceReason = 'busy_road' | 'no_lights' | 'other';
+export type AvoidanceReason = 'busy_road' | 'no_lights' | 'not_accessible' | 'other';
 
 export interface AddAvoidedRoadRequest {
   osmWayId: number;
