@@ -400,6 +400,25 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
     }).addTo(group);
 
     for (const segment of route.segments || []) {
+      if (segment.surface !== 'unknown') {
+        continue;
+      }
+      const from = latLngs[segment.fromIndex];
+      const to = latLngs[segment.toIndex];
+      if (!from || !to) {
+        continue;
+      }
+      L.polyline([from, to], {
+        color: '#2563eb',
+        weight: 7,
+        opacity: 0.95,
+        lineCap: 'round',
+        lineJoin: 'round',
+        renderer: this.routeRenderer,
+      }).addTo(group);
+    }
+
+    for (const segment of route.segments || []) {
       const from = latLngs[segment.fromIndex];
       const to = latLngs[segment.toIndex];
       if (!from || !to || !segment.osmWayId) {

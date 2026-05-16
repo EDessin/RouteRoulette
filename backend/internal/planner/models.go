@@ -88,4 +88,5 @@ type RouteSegment struct {
 	OSMWayID  int64   `json:"osmWayId,omitempty"`
 	Name      string  `json:"name,omitempty"`
 	DistanceM float64 `json:"distanceM"`
+	Surface   string  `json:"surface,omitempty"`
 }

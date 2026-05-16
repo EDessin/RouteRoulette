@@ -70,6 +70,7 @@ export interface RouteSegment {
   osmWayId?: number;
   name?: string;
   distanceM: number;
+  surface?: 'paved' | 'unpaved' | 'unknown';
 }
 
 export interface AvoidedRoad {

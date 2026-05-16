@@ -583,13 +583,13 @@ func TestAvoidedRoadDistanceRejectsLongUsage(t *testing.T) {
 
 func TestRouteSegmentsExposeRoadMetadata(t *testing.T) {
 	segments := routeSegments([]int{0, 1}, []GraphEdge{
-		{Distance: 42.04, OSMWayID: 99, Name: "Busy Lane"},
+		{Distance: 42.04, OSMWayID: 99, Name: "Busy Lane", Surface: SurfaceUnknown},
 	})
 
 	if len(segments) != 1 {
 		t.Fatalf("routeSegments() length = %d, want 1", len(segments))
 	}
-	if segments[0].FromIndex != 0 || segments[0].ToIndex != 1 || segments[0].OSMWayID != 99 || segments[0].Name != "Busy Lane" {
+	if segments[0].FromIndex != 0 || segments[0].ToIndex != 1 || segments[0].OSMWayID != 99 || segments[0].Name != "Busy Lane" || segments[0].Surface != "unknown" {
 		t.Fatalf("routeSegments() = %+v, want segment metadata", segments[0])
 	}
 }

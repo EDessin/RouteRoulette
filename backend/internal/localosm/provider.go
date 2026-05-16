@@ -1372,9 +1372,23 @@ func routeSegments(path []int, edges []GraphEdge) []planner.RouteSegment {
 			OSMWayID:  edge.OSMWayID,
 			Name:      edge.Name,
 			DistanceM: round(edge.Distance, 1),
+			Surface:   routeSegmentSurface(edge.Surface),
 		})
 	}
 	return segments
+}
+
+func routeSegmentSurface(surface int) string {
+	switch surface {
+	case SurfacePaved:
+		return "paved"
+	case SurfaceUnpaved:
+		return "unpaved"
+	case SurfaceUnknown:
+		return "unknown"
+	default:
+		return ""
+	}
 }
 
 func (g *Graph) historyEdges(store *history.Store) (historyOverlay, error) {
