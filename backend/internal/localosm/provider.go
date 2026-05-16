@@ -790,11 +790,11 @@ type localCandidate struct {
 }
 
 func pavedOnly(req planner.CandidateRequest) bool {
-	return req.PreferPaved || req.MinPavedPercent > 0
+	return req.PreferPaved && req.MinPavedPercent >= 100
 }
 
 func surfacePolicy(req planner.CandidateRequest) string {
-	if req.SurfacePolicy == SurfacePolicyAssumePaved {
+	if req.SurfacePolicy == "" || req.SurfacePolicy == SurfacePolicyAssumePaved {
 		return SurfacePolicyAssumePaved
 	}
 	return SurfacePolicyStrict
@@ -1792,10 +1792,8 @@ func localScore(candidate localCandidate, targetM float64, minPavedPercent float
 	}
 	pavedPenalty := 0.0
 	if minPavedPercent > 0 {
-		pavedPenalty = math.Abs(candidate.PavedPercent-minPavedPercent) * 10
-		if candidate.PavedPercent < minPavedPercent {
-			pavedPenalty *= 4
-		}
+		shortfall := math.Max(0, minPavedPercent-candidate.PavedPercent)
+		pavedPenalty = shortfall*40 + math.Max(0, 100-candidate.PavedPercent)*0.5
 	}
 	historyPenalty := 0.0
 	if preferUnrunRoads {

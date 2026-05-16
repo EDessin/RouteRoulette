@@ -166,14 +166,6 @@ p {
   flex: 1 1 0;
 }
 
-.slider-field {
-  padding: 0 0.2rem;
-}
-
-.slider-field + .field {
-  margin-top: 0.25rem;
-}
-
 .summary-wide {
   grid-column: 1 / -1;
 }

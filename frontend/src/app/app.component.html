@@ -92,26 +92,6 @@
       </label>
 
       <label class="field">
-        <span>Start within</span>
-        <p-inputnumber
-          [(ngModel)]="maxStartDistanceKm"
-          name="maxStartDistanceKm"
-          [min]="0"
-          [max]="25"
-          [step]="0.5"
-          suffix=" km"
-          inputId="maxStartDistanceKm"
-          mode="decimal"
-          [minFractionDigits]="0"
-          [maxFractionDigits]="1"
-        />
-      </label>
-
-      <div class="slider-field">
-        <p-slider [(ngModel)]="maxStartDistanceKm" name="maxStartDistanceKmSlider" [min]="0" [max]="25" [step]="0.5" />
-      </div>
-
-      <label class="field">
         <span>Estimated pace</span>
         <p-inputnumber
           [(ngModel)]="estimatedPaceMinPerKm"
@@ -129,7 +109,7 @@
 
       <label class="check-row">
         <p-checkbox [(ngModel)]="preferPaved" name="preferPaved" [binary]="true" inputId="preferPaved" />
-        <span>Paved roads only</span>
+        <span>Prefer paved roads</span>
       </label>
 
       <label class="check-row">
@@ -141,38 +121,6 @@
         />
         <span>Prefer unrun roads</span>
       </label>
-
-      <label class="field">
-        <span>Surface data</span>
-        <p-selectbutton
-          [(ngModel)]="surfacePolicy"
-          name="surfacePolicy"
-          [options]="surfacePolicyOptions"
-          optionLabel="label"
-          optionValue="value"
-          [allowEmpty]="false"
-        />
-      </label>
-
-      <label class="field">
-        <span>Minimum paved</span>
-        <p-inputnumber
-          [(ngModel)]="minPavedPercent"
-          name="minPavedPercent"
-          [min]="0"
-          [max]="100"
-          [step]="5"
-          suffix="%"
-          inputId="minPavedPercent"
-          mode="decimal"
-          [minFractionDigits]="0"
-          [maxFractionDigits]="0"
-        />
-      </label>
-
-      <div class="slider-field">
-        <p-slider [(ngModel)]="minPavedPercent" name="minPavedPercentSlider" [min]="0" [max]="100" [step]="5" />
-      </div>
 
       <button pButton type="submit" icon="pi pi-directions" label="Generate route" [loading]="isGenerating"></button>
     </form>
@@ -227,19 +175,12 @@
             <strong>{{ route.unrunPercent | number: '1.0-0' }}%</strong>
           </div>
         }
-        @if (route.previouslyRunPercent !== undefined) {
-          <div>
-            <span>Run before</span>
-            <strong>{{ route.previouslyRunPercent | number: '1.0-0' }}%</strong>
-          </div>
-        }
         @if (route.avoidedRoadDistanceM !== undefined && route.avoidedRoadDistanceM > 0) {
           <div>
             <span>Avoided roads</span>
             <strong>{{ route.avoidedRoadDistanceM | number: '1.0-0' }} m</strong>
           </div>
         }
-        <p-tag [value]="route.provider" severity="secondary" />
       </section>
       <button
         pButton

@@ -117,7 +117,7 @@ func (p Planner) providerAttempts() int {
 
 func routeScore(route CandidateRoute, targetM float64, minPavedPercent float64) float64 {
 	pavedShortfall := pavedShortfallRatio(route, minPavedPercent)
-	pavedDifference := pavedDifferenceRatio(route, minPavedPercent)
+	pavedGapToPerfect := pavedGapToPerfectRatio(route, minPavedPercent)
 	shortRoutePenalty := math.Max(0, targetM-route.DistanceM) / targetM
 	extraMeters := math.Max(0, route.DistanceM-targetM)
 	extraDistancePenalty := extraMeters / targetM
@@ -126,7 +126,7 @@ func routeScore(route CandidateRoute, targetM float64, minPavedPercent float64) 
 	}
 
 	if minPavedPercent > 0 {
-		return pavedShortfall*120 + pavedDifference*30 + shortRoutePenalty*50 + extraDistancePenalty
+		return pavedShortfall*120 + pavedGapToPerfect*5 + shortRoutePenalty*50 + extraDistancePenalty
 	}
 
 	return shortRoutePenalty*50 + extraDistancePenalty
@@ -139,22 +139,22 @@ func pavedShortfallRatio(route CandidateRoute, minPavedPercent float64) float64 
 	return math.Max(0, minPavedPercent-*route.PavedPercent) / 100
 }
 
-func pavedDifferenceRatio(route CandidateRoute, minPavedPercent float64) float64 {
+func pavedGapToPerfectRatio(route CandidateRoute, minPavedPercent float64) float64 {
 	if minPavedPercent <= 0 || route.PavedPercent == nil {
 		return 0
 	}
-	return math.Abs(minPavedPercent-*route.PavedPercent) / 100
+	return math.Max(0, 100-*route.PavedPercent) / 100
 }
 
-func pavedDifferencePercent(route CandidateRoute, minPavedPercent float64) float64 {
+func pavedShortfallPercent(route CandidateRoute, minPavedPercent float64) float64 {
 	if minPavedPercent <= 0 || route.PavedPercent == nil {
 		return 0
 	}
-	return math.Abs(minPavedPercent - *route.PavedPercent)
+	return math.Max(0, minPavedPercent-*route.PavedPercent)
 }
 
 func isGoodEnough(route CandidateRoute, targetM float64, minPavedPercent float64) bool {
-	return route.DistanceM >= targetM && pavedDifferencePercent(route, minPavedPercent) <= 5
+	return route.DistanceM >= targetM && pavedShortfallPercent(route, minPavedPercent) <= 5
 }
 
 func routeResponse(route CandidateRoute, req GenerateRouteRequest, warnings []string) RouteResponse {
@@ -163,18 +163,15 @@ func routeResponse(route CandidateRoute, req GenerateRouteRequest, warnings []st
 
 	actualKm := route.DistanceM / 1000
 	if actualKm < req.TargetDistanceKm {
-		allWarnings = append(allWarnings, "The best route found is shorter than requested. Try lowering the minimum paved percentage or increasing the start radius.")
+		allWarnings = append(allWarnings, "The best route found is shorter than requested. Try turning off Prefer paved roads or choosing a shorter route.")
 	} else if actualKm > req.TargetDistanceKm+0.5 {
 		allWarnings = append(allWarnings, "The generated route is more than 0.5 km longer than requested.")
 	}
 	if req.MinPavedPercent > 0 && route.PavedPercent == nil {
-		allWarnings = append(allWarnings, "Surface data was not available, so the minimum paved percentage could not be verified.")
+		allWarnings = append(allWarnings, "Surface data was not available, so the paved-road preference could not be verified.")
 	}
 	if req.MinPavedPercent > 0 && route.PavedPercent != nil && *route.PavedPercent < req.MinPavedPercent {
 		allWarnings = append(allWarnings, fmt.Sprintf("The best route found is %.0f%% paved, below your %.0f%% minimum.", *route.PavedPercent, req.MinPavedPercent))
-	}
-	if req.MinPavedPercent > 0 && route.PavedPercent != nil && pavedDifferencePercent(route, req.MinPavedPercent) > 5 {
-		allWarnings = append(allWarnings, fmt.Sprintf("The best route found differs from your paved-road target by %.0f percentage points.", pavedDifferencePercent(route, req.MinPavedPercent)))
 	}
 
 	durationMinutes := route.DurationSeconds / 60

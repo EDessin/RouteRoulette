@@ -84,44 +84,44 @@ func testGenerateRouteRequest() GenerateRouteRequest {
 	}
 }
 
-func TestRouteScorePrefersCloserPavedMatch(t *testing.T) {
+func TestRouteScorePrefersMorePavedRoadsAboveMinimum(t *testing.T) {
 	targetM := 10000.0
-	closeMatch := 74.0
-	overPaved := 100.0
+	meetsMinimum := 82.0
+	morePaved := 100.0
 
-	routeNearRequestedPavedTarget := CandidateRoute{
+	routeThatMeetsMinimum := CandidateRoute{
 		DistanceM:    10500,
-		PavedPercent: &closeMatch,
+		PavedPercent: &meetsMinimum,
 	}
-	routeFarAboveRequestedPavedTarget := CandidateRoute{
+	routeWithMorePavedRoads := CandidateRoute{
 		DistanceM:    10500,
-		PavedPercent: &overPaved,
+		PavedPercent: &morePaved,
 	}
 
-	if routeScore(routeNearRequestedPavedTarget, targetM, 70) >= routeScore(routeFarAboveRequestedPavedTarget, targetM, 70) {
-		t.Fatal("expected route scoring to prefer the route closer to the requested paved percentage")
+	if routeScore(routeWithMorePavedRoads, targetM, 80) >= routeScore(routeThatMeetsMinimum, targetM, 80) {
+		t.Fatal("expected route scoring to prefer more paved roads above the minimum")
 	}
 }
 
-func TestGoodEnoughRequiresPavedMatchWithinFivePercentagePoints(t *testing.T) {
+func TestGoodEnoughAllowsRoutesAbovePavedMinimum(t *testing.T) {
 	targetM := 10000.0
-	closeMatch := 74.0
-	farMatch := 80.5
+	aboveMinimum := 95.0
+	belowMinimum := 74.0
 
-	closeRoute := CandidateRoute{
+	aboveMinimumRoute := CandidateRoute{
 		DistanceM:    10500,
-		PavedPercent: &closeMatch,
+		PavedPercent: &aboveMinimum,
 	}
-	farRoute := CandidateRoute{
+	belowMinimumRoute := CandidateRoute{
 		DistanceM:    10500,
-		PavedPercent: &farMatch,
+		PavedPercent: &belowMinimum,
 	}
 
-	if !isGoodEnough(closeRoute, targetM, 70) {
-		t.Fatal("expected route within five paved percentage points to be good enough")
+	if !isGoodEnough(aboveMinimumRoute, targetM, 80) {
+		t.Fatal("expected route above the paved minimum to be good enough")
 	}
-	if isGoodEnough(farRoute, targetM, 70) {
-		t.Fatal("expected route outside five paved percentage points not to be good enough")
+	if isGoodEnough(belowMinimumRoute, targetM, 80) {
+		t.Fatal("expected route more than five percentage points below the paved minimum not to be good enough")
 	}
 }
 

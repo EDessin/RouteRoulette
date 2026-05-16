@@ -268,6 +268,28 @@ func TestLocalScoreIgnoresPavedDifferenceWithoutMinimum(t *testing.T) {
 	}
 }
 
+func TestPreferPavedDoesNotForcePavedOnlyBelowOneHundredPercent(t *testing.T) {
+	req := planner.CandidateRequest{
+		PreferPaved:     true,
+		MinPavedPercent: 80,
+	}
+
+	if pavedOnly(req) {
+		t.Fatal("expected prefer paved roads at 80% to allow non-paved roads when needed")
+	}
+
+	req.MinPavedPercent = 100
+	if !pavedOnly(req) {
+		t.Fatal("expected 100% paved preference to keep paved-only filtering")
+	}
+}
+
+func TestSurfacePolicyDefaultsToAssumePaved(t *testing.T) {
+	if got := surfacePolicy(planner.CandidateRequest{}); got != SurfacePolicyAssumePaved {
+		t.Fatalf("surfacePolicy() = %q, want %q", got, SurfacePolicyAssumePaved)
+	}
+}
+
 func TestHasRepeatedEdgesDetectsOutAndBack(t *testing.T) {
 	if !hasRepeatedEdges([]int{1, 2, 1}) {
 		t.Fatal("expected an out-and-back path to count as a repeated road segment")

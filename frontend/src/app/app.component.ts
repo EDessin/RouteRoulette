@@ -11,8 +11,6 @@ import { InputTextModule } from 'primeng/inputtext';
 import { MessageModule } from 'primeng/message';
 import { ProgressSpinnerModule } from 'primeng/progressspinner';
 import { SelectButtonModule } from 'primeng/selectbutton';
-import { SliderModule } from 'primeng/slider';
-import { TagModule } from 'primeng/tag';
 import {
   AvoidanceReason,
   AvoidedRoad,
@@ -37,8 +35,6 @@ import {
     MessageModule,
     ProgressSpinnerModule,
     SelectButtonModule,
-    SliderModule,
-    TagModule,
   ],
   templateUrl: './app.component.html',
   styleUrl: './app.component.css',
@@ -49,16 +45,9 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
   homeAddress = 'Bossepleinstraat 121, 3130 Betekom';
   resolvedHomeLabel = this.homeAddress;
   targetDistanceKm = 8;
-  maxStartDistanceKm = 0;
   estimatedPaceMinPerKm = 6;
   preferPaved = true;
-  minPavedPercent = 70;
   preferUnrunRoads = true;
-  surfacePolicy: 'strict' | 'assume_paved' = 'assume_paved';
-  surfacePolicyOptions = [
-    { label: 'Assume normal roads paved', value: 'assume_paved' },
-    { label: 'Strict OSM tags', value: 'strict' },
-  ];
 
   route?: RouteResponse;
   historyStatus?: HistoryStatus;
@@ -211,7 +200,7 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
 
   generateRoute(): void {
     if (!this.isValidForm()) {
-      this.errorMessage = 'Check the home address, route length, start radius, pace, and paved percentage.';
+      this.errorMessage = 'Check the home address, route length, and pace.';
       return;
     }
 
@@ -240,25 +229,23 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
       this.homeAddress.trim().length >= 3 &&
       this.targetDistanceKm >= 1 &&
       this.targetDistanceKm <= 100 &&
-      this.maxStartDistanceKm >= 0 &&
-      this.maxStartDistanceKm <= 25 &&
       this.estimatedPaceMinPerKm >= 2 &&
-      this.estimatedPaceMinPerKm <= 20 &&
-      this.minPavedPercent >= 0 &&
-      this.minPavedPercent <= 100
+      this.estimatedPaceMinPerKm <= 20
     );
   }
 
   private generateRouteFromResolvedHome(): void {
+    const minPavedPercent = this.preferPaved ? 80 : 0;
+
     this.routeApi
       .generateRoute({
         home: this.homeCoordinate(),
         targetDistanceKm: this.targetDistanceKm,
-        maxStartDistanceKm: this.maxStartDistanceKm,
+        maxStartDistanceKm: 0,
         estimatedPaceMinPerKm: this.estimatedPaceMinPerKm,
         preferPaved: this.preferPaved,
-        minPavedPercent: this.minPavedPercent,
-        surfacePolicy: this.surfacePolicy,
+        minPavedPercent,
+        surfacePolicy: 'assume_paved',
         preferUnrunRoads: this.preferUnrunRoads,
         seed: Date.now(),
       })
