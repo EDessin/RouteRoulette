@@ -312,6 +312,46 @@ func TestApplySurfaceMarksOverridesOSMSurfaceTags(t *testing.T) {
 	}
 }
 
+func TestSurfaceMarksAffectPavedPercentages(t *testing.T) {
+	graph := Graph{
+		Nodes: []GraphNode{
+			{Lat: 0, Lon: 0},
+			{Lat: 0, Lon: 0.001},
+			{Lat: 0, Lon: 0.002},
+		},
+		Edges: [][]GraphEdge{
+			{{To: 1, Distance: 50, Surface: SurfacePaved, OSMWayID: 1}},
+			{{To: 0, Distance: 50, Surface: SurfacePaved, OSMWayID: 1}, {To: 2, Distance: 50, Surface: SurfaceUnknown, OSMWayID: 42}},
+			{{To: 1, Distance: 50, Surface: SurfaceUnknown, OSMWayID: 42}},
+		},
+	}
+	path := []int{0, 1, 2}
+
+	graph.applySurfaceMarks(surfaceOverlay{RoadsByWayID: map[int64]surfacemarks.Road{
+		42: {OSMWayID: 42, Surface: surfacemarks.SurfacePaved},
+	}})
+	pavedCandidate, err := buildLocalCandidate(path, []GraphEdge{graph.Edges[0][0], graph.Edges[1][1]}, 100, SurfacePolicyAssumePaved, nil, emptyHistoryOverlay(), emptyAvoidanceOverlay())
+	if err != nil {
+		t.Fatalf("buildLocalCandidate() with paved mark returned error: %v", err)
+	}
+	if pavedCandidate.TaggedPavedPercent != 100 || pavedCandidate.UnknownPercent != 0 {
+		t.Fatalf("paved mark percentages = paved %.0f unknown %.0f, want paved 100 unknown 0", pavedCandidate.TaggedPavedPercent, pavedCandidate.UnknownPercent)
+	}
+
+	graph.Edges[1][1].Surface = SurfaceUnknown
+	graph.Edges[2][0].Surface = SurfaceUnknown
+	graph.applySurfaceMarks(surfaceOverlay{RoadsByWayID: map[int64]surfacemarks.Road{
+		42: {OSMWayID: 42, Surface: surfacemarks.SurfaceUnpaved},
+	}})
+	unpavedCandidate, err := buildLocalCandidate(path, []GraphEdge{graph.Edges[0][0], graph.Edges[1][1]}, 100, SurfacePolicyAssumePaved, nil, emptyHistoryOverlay(), emptyAvoidanceOverlay())
+	if err != nil {
+		t.Fatalf("buildLocalCandidate() with unpaved mark returned error: %v", err)
+	}
+	if unpavedCandidate.TaggedPavedPercent != 50 || unpavedCandidate.UnpavedPercent != 50 || unpavedCandidate.UnknownPercent != 0 {
+		t.Fatalf("unpaved mark percentages = paved %.0f unpaved %.0f unknown %.0f, want 50/50/0", unpavedCandidate.TaggedPavedPercent, unpavedCandidate.UnpavedPercent, unpavedCandidate.UnknownPercent)
+	}
+}
+
 func TestHasRepeatedEdgesDetectsOutAndBack(t *testing.T) {
 	if !hasRepeatedEdges([]int{1, 2, 1}) {
 		t.Fatal("expected an out-and-back path to count as a repeated road segment")
