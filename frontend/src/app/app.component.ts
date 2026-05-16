@@ -479,7 +479,7 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
       case 'unknown':
         return { color: '#2563eb', weight: 7 };
       case 'unpaved':
-        return { color: '#dc2626', weight: 7, dashArray: '8 7' };
+        return { color: '#16a34a', weight: 7, dashArray: '8 7' };
       default:
         return undefined;
     }
