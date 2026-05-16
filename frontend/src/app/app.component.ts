@@ -371,20 +371,37 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
     this.startMarker.bindTooltip('Start');
 
     this.drawHomeMarker();
-    this.map.fitBounds(this.homeCenteredRouteBounds(latLngs), {
-      padding: [32, 32],
-      maxZoom: 15,
-    });
+    this.fitRouteAroundHome(latLngs);
   }
 
-  private homeCenteredRouteBounds(latLngs: L.LatLngTuple[]): L.LatLngBounds {
-    const home = L.latLng(this.homeLat, this.homeLon);
-    const bounds = L.latLngBounds([home]);
-    for (const [lat, lon] of latLngs) {
-      bounds.extend([lat, lon]);
-      bounds.extend([2 * home.lat - lat, 2 * home.lng - lon]);
+  private fitRouteAroundHome(latLngs: L.LatLngTuple[]): void {
+    if (!this.map || latLngs.length === 0) {
+      return;
     }
-    return bounds;
+
+    const home = L.latLng(this.homeLat, this.homeLon);
+    const padding = 56;
+    const mapMaxZoom = this.map.getMaxZoom();
+    const minZoom = Math.max(0, this.map.getMinZoom() ?? 0);
+    const maxZoom = Math.max(minZoom, Number.isFinite(mapMaxZoom) ? Math.min(15, mapMaxZoom) : 15);
+    const size = this.map.invalidateSize(false).getSize();
+    const availableX = Math.max(1, size.x / 2 - padding);
+    const availableY = Math.max(1, size.y / 2 - padding);
+
+    let selectedZoom = minZoom;
+    for (let zoom = maxZoom; zoom >= minZoom; zoom--) {
+      const homePoint = this.map.project(home, zoom);
+      const routeFits = latLngs.every(([lat, lon]) => {
+        const point = this.map!.project([lat, lon], zoom);
+        return Math.abs(point.x - homePoint.x) <= availableX && Math.abs(point.y - homePoint.y) <= availableY;
+      });
+      if (routeFits) {
+        selectedZoom = zoom;
+        break;
+      }
+    }
+
+    this.map.setView(home, selectedZoom, { animate: false });
   }
 
   private openAvoidDialog(segment: RouteSegment, latLng: L.LatLng): void {
