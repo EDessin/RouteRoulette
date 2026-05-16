@@ -232,6 +232,7 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
           this.isSavingMarkedRoad = false;
           this.roadDialogVisible = false;
           this.surfaceMessage = 'Road surface saved.';
+          this.updateCurrentRouteSurface(this.selectedSegment!.osmWayId!, this.selectedMarkedSurface);
           this.loadMarkedRoads();
         },
         error: (err: HttpErrorResponse) => {
@@ -379,7 +380,7 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
     this.homeMarker.bindTooltip('Home');
   }
 
-  private drawRoute(route: RouteResponse): void {
+  private drawRoute(route: RouteResponse, fitRoute = true): void {
     if (!this.map) {
       return;
     }
@@ -447,7 +448,54 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
     this.startMarker.bindTooltip('Start');
 
     this.drawHomeMarker();
-    this.fitRouteAroundHome(latLngs);
+    if (fitRoute) {
+      this.fitRouteAroundHome(latLngs);
+    }
+  }
+
+  private updateCurrentRouteSurface(osmWayId: number, surface: 'paved' | 'unpaved'): void {
+    if (!this.route?.segments) {
+      return;
+    }
+
+    const updatedRoute: RouteResponse = {
+      ...this.route,
+      segments: this.route.segments.map((segment) =>
+        segment.osmWayId === osmWayId
+          ? {
+              ...segment,
+              surface,
+            }
+          : segment,
+      ),
+    };
+    this.updateRouteSurfacePercentages(updatedRoute);
+    this.route = updatedRoute;
+    this.drawRoute(updatedRoute, false);
+  }
+
+  private updateRouteSurfacePercentages(route: RouteResponse): void {
+    const segments = route.segments || [];
+    const total = segments.reduce((sum, segment) => sum + segment.distanceM, 0);
+    if (total <= 0) {
+      return;
+    }
+
+    const paved = segments
+      .filter((segment) => segment.surface === 'paved')
+      .reduce((sum, segment) => sum + segment.distanceM, 0);
+    const unpaved = segments
+      .filter((segment) => segment.surface === 'unpaved')
+      .reduce((sum, segment) => sum + segment.distanceM, 0);
+    const unknown = Math.max(0, total - paved - unpaved);
+
+    route.pavedPercent = this.roundPercent((paved / total) * 100);
+    route.unpavedPercent = this.roundPercent((unpaved / total) * 100);
+    route.unknownSurfacePercent = this.roundPercent((unknown / total) * 100);
+  }
+
+  private roundPercent(value: number): number {
+    return Math.round(value * 10) / 10;
   }
 
   private fitRouteAroundHome(latLngs: L.LatLngTuple[]): void {
