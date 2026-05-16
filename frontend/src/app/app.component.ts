@@ -401,7 +401,8 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
     }).addTo(group);
 
     for (const segment of route.segments || []) {
-      if (segment.surface !== 'unknown') {
+      const surfaceStyle = this.segmentSurfaceStyle(segment);
+      if (!surfaceStyle) {
         continue;
       }
       const from = latLngs[segment.fromIndex];
@@ -410,8 +411,7 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
         continue;
       }
       L.polyline([from, to], {
-        color: '#2563eb',
-        weight: 7,
+        ...surfaceStyle,
         opacity: 0.95,
         lineCap: 'round',
         lineJoin: 'round',
@@ -472,6 +472,17 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
     this.updateRouteSurfacePercentages(updatedRoute);
     this.route = updatedRoute;
     this.drawRoute(updatedRoute, false);
+  }
+
+  private segmentSurfaceStyle(segment: RouteSegment): L.PolylineOptions | undefined {
+    switch (segment.surface) {
+      case 'unknown':
+        return { color: '#2563eb', weight: 7 };
+      case 'unpaved':
+        return { color: '#dc2626', weight: 7, dashArray: '8 7' };
+      default:
+        return undefined;
+    }
   }
 
   private updateRouteSurfacePercentages(route: RouteResponse): void {
