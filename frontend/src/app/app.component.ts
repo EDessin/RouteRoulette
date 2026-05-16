@@ -184,10 +184,12 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
         coordinate: this.selectedSegmentCoordinate,
       })
       .subscribe({
-        next: () => {
+        next: (road) => {
           this.isSavingAvoidedRoad = false;
           this.roadDialogVisible = false;
           this.avoidanceMessage = 'Road added to your avoid list.';
+          this.upsertAvoidedRoad(road);
+          this.redrawCurrentRoute();
           this.loadAvoidedRoads();
         },
         error: (err: HttpErrorResponse) => {
@@ -203,6 +205,8 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
     this.routeApi.deleteAvoidedRoad(road.id).subscribe({
       next: () => {
         this.avoidanceMessage = 'Road removed from your avoid list.';
+        this.avoidedRoads = this.avoidedRoads.filter((savedRoad) => savedRoad.id !== road.id);
+        this.redrawCurrentRoute();
         this.loadAvoidedRoads();
       },
       error: (err: HttpErrorResponse) => {
@@ -345,6 +349,7 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
     this.routeApi.getAvoidedRoads().subscribe({
       next: (roads) => {
         this.avoidedRoads = roads;
+        this.redrawCurrentRoute();
       },
       error: () => {
         this.avoidedRoads = [];
@@ -401,8 +406,8 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
     }).addTo(group);
 
     for (const segment of route.segments || []) {
-      const surfaceStyle = this.segmentSurfaceStyle(segment);
-      if (!surfaceStyle) {
+      const overlayStyle = this.segmentOverlayStyle(segment);
+      if (!overlayStyle) {
         continue;
       }
       const from = latLngs[segment.fromIndex];
@@ -411,7 +416,7 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
         continue;
       }
       L.polyline([from, to], {
-        ...surfaceStyle,
+        ...overlayStyle,
         opacity: 0.95,
         lineCap: 'round',
         lineJoin: 'round',
@@ -474,7 +479,20 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
     this.drawRoute(updatedRoute, false);
   }
 
-  private segmentSurfaceStyle(segment: RouteSegment): L.PolylineOptions | undefined {
+  private upsertAvoidedRoad(road: AvoidedRoad): void {
+    this.avoidedRoads = [road, ...this.avoidedRoads.filter((savedRoad) => savedRoad.id !== road.id)];
+  }
+
+  private redrawCurrentRoute(): void {
+    if (this.route) {
+      this.drawRoute(this.route, false);
+    }
+  }
+
+  private segmentOverlayStyle(segment: RouteSegment): L.PolylineOptions | undefined {
+    if (this.isAvoidedRoadSegment(segment)) {
+      return { color: '#dc2626', weight: 8 };
+    }
     switch (segment.surface) {
       case 'unknown':
         return { color: '#2563eb', weight: 7 };
@@ -483,6 +501,10 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
       default:
         return undefined;
     }
+  }
+
+  private isAvoidedRoadSegment(segment: RouteSegment): boolean {
+    return !!segment.osmWayId && this.avoidedRoads.some((road) => road.osmWayId === segment.osmWayId);
   }
 
   private updateRouteSurfacePercentages(route: RouteResponse): void {
