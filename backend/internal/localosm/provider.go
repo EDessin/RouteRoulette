@@ -632,6 +632,10 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest, history historyOverla
 	if useCycleGenerator(req.TargetDistanceM) {
 		cycleAnchors = g.newCycleAnchorSet(start, req.TargetDistanceM, pavedOnly, policy)
 	}
+	mediumCycleAnchors := waypointSet{}
+	if useMediumLoopGenerator(req.TargetDistanceM) {
+		mediumCycleAnchors = g.newMediumCycleAnchorSet(start, req.TargetDistanceM, pavedOnly, policy)
+	}
 	shortCycleAnchors := waypointSet{}
 	if useShortLoopGenerator(req.TargetDistanceM) {
 		shortCycleAnchors = g.newShortCycleAnchorSet(start, req.TargetDistanceM, pavedOnly, policy)
@@ -653,6 +657,10 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest, history historyOverla
 			candidate, err = g.cycleCandidate(start, req.TargetDistanceM, req.MinPavedPercent, pavedOnly, policy, rng, shortCycleAnchors, history, avoided, search)
 		} else if useShortLoopGenerator(req.TargetDistanceM) && len(shortCycleAnchors.Nodes) > 0 && i%3 == 1 {
 			candidate, err = g.blockLoopCandidate(start, req.TargetDistanceM, req.MinPavedPercent, pavedOnly, policy, rng, shortCycleAnchors, history, avoided, search)
+		} else if useMediumLoopGenerator(req.TargetDistanceM) && len(mediumCycleAnchors.Nodes) > 0 && i%3 == 0 {
+			candidate, err = g.cycleCandidate(start, req.TargetDistanceM, req.MinPavedPercent, pavedOnly, policy, rng, mediumCycleAnchors, history, avoided, search)
+		} else if useMediumLoopGenerator(req.TargetDistanceM) && len(mediumCycleAnchors.Nodes) > 0 && i%3 == 1 {
+			candidate, err = g.blockLoopCandidate(start, req.TargetDistanceM, req.MinPavedPercent, pavedOnly, policy, rng, mediumCycleAnchors, history, avoided, search)
 		} else if useCycleGenerator(req.TargetDistanceM) && len(cycleAnchors.Nodes) > 0 {
 			candidate, err = g.cycleCandidate(start, req.TargetDistanceM, req.MinPavedPercent, pavedOnly, policy, rng, cycleAnchors, history, avoided, search)
 		} else {
@@ -845,6 +853,20 @@ func (g *Graph) newCycleAnchorSet(start int, targetM float64, pavedOnly bool, su
 	return waypointSet{Nodes: nodes}
 }
 
+func (g *Graph) newMediumCycleAnchorSet(start int, targetM float64, pavedOnly bool, surfacePolicy string) waypointSet {
+	inComponent := g.connectedComponent(start, pavedOnly, surfacePolicy)
+	minDistM := math.Max(800, targetM*0.14)
+	maxDistM := math.Max(minDistM+500, targetM*0.58)
+	nodes := g.waypointNodes(start, inComponent, pavedOnly, surfacePolicy, minDistM, maxDistM, 3)
+	if len(nodes) == 0 {
+		nodes = g.waypointNodes(start, inComponent, pavedOnly, surfacePolicy, minDistM, maxDistM, 2)
+	}
+	if len(nodes) == 0 {
+		nodes = g.waypointNodes(start, inComponent, pavedOnly, surfacePolicy, minDistM*0.75, maxDistM*1.15, 1)
+	}
+	return waypointSet{Nodes: nodes}
+}
+
 func (g *Graph) newShortCycleAnchorSet(start int, targetM float64, pavedOnly bool, surfacePolicy string) waypointSet {
 	inComponent := g.connectedComponent(start, pavedOnly, surfacePolicy)
 	minDistM := math.Max(180, targetM*0.12)
@@ -992,6 +1014,8 @@ func (g *Graph) cycleCandidate(start int, targetM float64, minPavedPercent float
 	desiredRatio := 0.28 + rng.Float64()*0.24
 	if useShortLoopGenerator(targetM) {
 		desiredRatio = 0.20 + rng.Float64()*0.30
+	} else if useMediumLoopGenerator(targetM) {
+		desiredRatio = 0.18 + rng.Float64()*0.30
 	}
 	desiredDistanceM := targetM * desiredRatio
 	anchor, err := anchors.pick(desiredBearing, desiredDistanceM, map[int]struct{}{start: {}}, rng)
@@ -1004,6 +1028,8 @@ func (g *Graph) cycleCandidate(start int, targetM float64, minPavedPercent float
 	expandM := targetM * 0.35
 	if useShortLoopGenerator(targetM) {
 		expandM = targetM * 0.2
+	} else if useMediumLoopGenerator(targetM) {
+		expandM = targetM * 0.28
 	}
 	bounds = bounds.expandToward(startNode, startBearing, expandM)
 
@@ -1039,13 +1065,20 @@ func (g *Graph) blockLoopCandidate(start int, targetM float64, minPavedPercent f
 	startNode := g.Nodes[start]
 	desiredBearing := rng.Float64() * 2 * math.Pi
 	desiredDistanceM := targetM * (0.15 + rng.Float64()*0.25)
+	if useMediumLoopGenerator(targetM) {
+		desiredDistanceM = targetM * (0.18 + rng.Float64()*0.30)
+	}
 	anchor, err := anchors.pick(desiredBearing, desiredDistanceM, map[int]struct{}{start: {}}, rng)
 	if err != nil {
 		return localCandidate{}, err
 	}
 
 	bounds := g.newRouteSearchBounds([]int{start, anchor}, targetM, minPavedPercent, pavedOnly, surfacePolicy)
-	bounds = bounds.expandToward(startNode, bearingRadians(startNode.Lat, startNode.Lon, g.Nodes[anchor].Lat, g.Nodes[anchor].Lon), targetM*0.12)
+	expandM := targetM * 0.12
+	if useMediumLoopGenerator(targetM) {
+		expandM = targetM * 0.22
+	}
+	bounds = bounds.expandToward(startNode, bearingRadians(startNode.Lat, startNode.Lon, g.Nodes[anchor].Lat, g.Nodes[anchor].Lon), expandM)
 
 	search.Bounds = bounds
 	outPath, outEdges, err := g.shortestPath(start, anchor, minPavedPercent, pavedOnly, surfacePolicy, nil, history.RecentEdges, avoided.RoadsByWayID, search)
@@ -1115,11 +1148,15 @@ func buildLocalCandidate(path []int, edges []GraphEdge, targetM float64, surface
 }
 
 func useCycleGenerator(targetM float64) bool {
-	return targetM >= 12000
+	return targetM > 12000
 }
 
 func useShortLoopGenerator(targetM float64) bool {
 	return targetM <= 5000
+}
+
+func useMediumLoopGenerator(targetM float64) bool {
+	return targetM > 5000 && targetM <= 12000
 }
 
 func loopRadiusForTarget(targetM float64) float64 {
@@ -1147,8 +1184,11 @@ func waypointCountForTarget(targetM float64, rng *rand.Rand) int {
 }
 
 func routeCandidateAttempts(targetM float64) int {
-	if targetM >= 12000 {
+	if useCycleGenerator(targetM) {
 		return 600
+	}
+	if useMediumLoopGenerator(targetM) {
+		return 250
 	}
 	return 100
 }

@@ -435,9 +435,63 @@ func TestWaypointCountUsesMoreStopsForLongRoutes(t *testing.T) {
 	}
 }
 
+func TestMediumLoopGeneratorCoversSixToTwelveKilometers(t *testing.T) {
+	tests := []struct {
+		targetM float64
+		want    bool
+	}{
+		{targetM: 5000, want: false},
+		{targetM: 6000, want: true},
+		{targetM: 12000, want: true},
+		{targetM: 12001, want: false},
+	}
+
+	for _, tt := range tests {
+		if got := useMediumLoopGenerator(tt.targetM); got != tt.want {
+			t.Fatalf("useMediumLoopGenerator(%.0f) = %t, want %t", tt.targetM, got, tt.want)
+		}
+	}
+	if useCycleGenerator(12000) {
+		t.Fatal("expected 12 km to use the medium loop generator instead of the long-route cycle generator")
+	}
+}
+
+func TestMediumCycleAnchorSetUsesNearbyIntersections(t *testing.T) {
+	graph := Graph{
+		Nodes: []GraphNode{
+			{Lat: 0, Lon: 0},
+			{Lat: 0, Lon: 0.008},
+			{Lat: 0.002, Lon: 0.008},
+			{Lat: -0.002, Lon: 0.008},
+			{Lat: 0, Lon: 0.02},
+			{Lat: 0.002, Lon: 0.02},
+		},
+		Edges: make([][]GraphEdge, 6),
+	}
+	addTestEdge(&graph, 0, 1, SurfacePaved)
+	addTestEdge(&graph, 1, 2, SurfacePaved)
+	addTestEdge(&graph, 1, 3, SurfacePaved)
+	addTestEdge(&graph, 4, 5, SurfacePaved)
+
+	set := graph.newMediumCycleAnchorSet(0, 6000, true, SurfacePolicyStrict)
+
+	if len(set.Nodes) == 0 {
+		t.Fatal("expected medium cycle anchors to contain reachable local intersections")
+	}
+	if set.Nodes[0].Index != 1 {
+		t.Fatalf("medium cycle anchor = %d, want nearby connected intersection 1", set.Nodes[0].Index)
+	}
+}
+
 func TestRouteCandidateAttemptsIncreaseForLongRoutes(t *testing.T) {
-	if got := routeCandidateAttempts(8000); got != 100 {
-		t.Fatalf("routeCandidateAttempts(8000) = %d, want 100", got)
+	if got := routeCandidateAttempts(4000); got != 100 {
+		t.Fatalf("routeCandidateAttempts(4000) = %d, want 100", got)
+	}
+	if got := routeCandidateAttempts(8000); got != 250 {
+		t.Fatalf("routeCandidateAttempts(8000) = %d, want 250", got)
+	}
+	if got := routeCandidateAttempts(12000); got != 250 {
+		t.Fatalf("routeCandidateAttempts(12000) = %d, want 250", got)
 	}
 	if got := routeCandidateAttempts(16000); got != 600 {
 		t.Fatalf("routeCandidateAttempts(16000) = %d, want 600", got)
