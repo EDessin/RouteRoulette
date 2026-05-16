@@ -20,6 +20,7 @@ import (
 	"github.com/EDessin/RouteRoulette/backend/internal/avoidance"
 	"github.com/EDessin/RouteRoulette/backend/internal/history"
 	"github.com/EDessin/RouteRoulette/backend/internal/planner"
+	"github.com/EDessin/RouteRoulette/backend/internal/surfacemarks"
 	"github.com/paulmach/osm"
 	"github.com/paulmach/osm/osmpbf"
 )
@@ -50,6 +51,7 @@ type Config struct {
 	AllowDownload  bool
 	HistoryStore   *history.Store
 	AvoidanceStore *avoidance.Store
+	SurfaceStore   *surfacemarks.Store
 }
 
 type Provider struct {
@@ -78,6 +80,10 @@ type historyOverlay struct {
 
 type avoidanceOverlay struct {
 	RoadsByWayID map[int64]avoidance.Road
+}
+
+type surfaceOverlay struct {
+	RoadsByWayID map[int64]surfacemarks.Road
 }
 
 func NewProvider(cfg Config) Provider {
@@ -121,6 +127,14 @@ func (p Provider) GenerateRoundTrip(ctxReq *http.Request, req planner.CandidateR
 	routeGraph, subgraphRadiusKm, err := graph.routeSubgraph(req.Start, req.TargetDistanceM, pavedOnly, policy)
 	if err != nil {
 		return planner.CandidateRoute{}, err
+	}
+	routeSurfaceMarks := emptySurfaceOverlay()
+	if p.cfg.SurfaceStore != nil {
+		routeSurfaceMarks, err = p.loadSurfaceMarks()
+		if err != nil {
+			return planner.CandidateRoute{}, err
+		}
+		routeGraph.applySurfaceMarks(routeSurfaceMarks)
 	}
 	subgraphDuration := time.Since(subgraphStarted)
 
@@ -261,6 +275,14 @@ func (p Provider) loadAvoidedRoads() (avoidanceOverlay, error) {
 		return avoidanceOverlay{}, err
 	}
 	return avoidanceOverlay{RoadsByWayID: avoidance.ByWayID(roads)}, nil
+}
+
+func (p Provider) loadSurfaceMarks() (surfaceOverlay, error) {
+	roads, err := p.cfg.SurfaceStore.List()
+	if err != nil {
+		return surfaceOverlay{}, err
+	}
+	return surfaceOverlay{RoadsByWayID: surfacemarks.ByWayID(roads)}, nil
 }
 
 func (p Provider) historyCacheKey(req planner.CandidateRequest, subgraphRadiusKm float64, pavedOnly bool, surfacePolicy string) string {
@@ -1288,6 +1310,30 @@ func emptyHistoryOverlay() historyOverlay {
 
 func emptyAvoidanceOverlay() avoidanceOverlay {
 	return avoidanceOverlay{RoadsByWayID: map[int64]avoidance.Road{}}
+}
+
+func emptySurfaceOverlay() surfaceOverlay {
+	return surfaceOverlay{RoadsByWayID: map[int64]surfacemarks.Road{}}
+}
+
+func (g *Graph) applySurfaceMarks(marks surfaceOverlay) {
+	if len(marks.RoadsByWayID) == 0 {
+		return
+	}
+	for from := range g.Edges {
+		for idx := range g.Edges[from] {
+			mark, ok := marks.RoadsByWayID[g.Edges[from][idx].OSMWayID]
+			if !ok {
+				continue
+			}
+			switch mark.Surface {
+			case surfacemarks.SurfacePaved:
+				g.Edges[from][idx].Surface = SurfacePaved
+			case surfacemarks.SurfaceUnpaved:
+				g.Edges[from][idx].Surface = SurfaceUnpaved
+			}
+		}
+	}
 }
 
 func avoidedRoadDistance(edges []GraphEdge, avoidedWays map[int64]avoidance.Road) (float64, error) {

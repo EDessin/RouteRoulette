@@ -13,6 +13,7 @@ import (
 	"github.com/EDessin/RouteRoulette/backend/internal/history"
 	"github.com/EDessin/RouteRoulette/backend/internal/planner"
 	"github.com/EDessin/RouteRoulette/backend/internal/strava"
+	"github.com/EDessin/RouteRoulette/backend/internal/surfacemarks"
 )
 
 type fakePlanner struct{}
@@ -51,6 +52,7 @@ func TestHistoryStatusAndStravaSyncEndpoints(t *testing.T) {
 	dir := t.TempDir()
 	historyStore := history.NewStore(dir)
 	avoidanceStore := avoidance.NewStore(t.TempDir())
+	surfaceStore := surfacemarks.NewStore(t.TempDir())
 	stravaClient := strava.NewClient(strava.Config{
 		ClientID:     "id",
 		ClientSecret: "secret",
@@ -65,7 +67,7 @@ func TestHistoryStatusAndStravaSyncEndpoints(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveToken() returned error: %v", err)
 	}
-	server := NewServer(config.Config{}, fakePlanner{}, fakeGeocoder{}, stravaClient, &historyStore, &avoidanceStore)
+	server := NewServer(config.Config{}, fakePlanner{}, fakeGeocoder{}, stravaClient, &historyStore, &avoidanceStore, &surfaceStore)
 
 	statusResp := httptest.NewRecorder()
 	server.Routes().ServeHTTP(statusResp, httptest.NewRequest(http.MethodGet, "/api/history/status", nil))
@@ -102,7 +104,8 @@ func TestHistoryStatusAndStravaSyncEndpoints(t *testing.T) {
 func TestAvoidanceEndpoints(t *testing.T) {
 	historyStore := history.NewStore(t.TempDir())
 	avoidanceStore := avoidance.NewStore(t.TempDir())
-	server := NewServer(config.Config{}, fakePlanner{}, fakeGeocoder{}, strava.Client{}, &historyStore, &avoidanceStore)
+	surfaceStore := surfacemarks.NewStore(t.TempDir())
+	server := NewServer(config.Config{}, fakePlanner{}, fakeGeocoder{}, strava.Client{}, &historyStore, &avoidanceStore, &surfaceStore)
 
 	addResp := httptest.NewRecorder()
 	addReq := httptest.NewRequest(http.MethodPost, "/api/avoidance", strings.NewReader(`{"osmWayId":42,"name":"Busy Lane","reason":"busy_road","coordinate":{"lat":50.1,"lon":4.7}}`))
@@ -128,5 +131,38 @@ func TestAvoidanceEndpoints(t *testing.T) {
 	server.Routes().ServeHTTP(deleteResp, httptest.NewRequest(http.MethodDelete, "/api/avoidance/way%3A42", nil))
 	if deleteResp.Code != http.StatusOK {
 		t.Fatalf("avoidance delete code = %d, want 200", deleteResp.Code)
+	}
+}
+
+func TestSurfaceMarkEndpoints(t *testing.T) {
+	historyStore := history.NewStore(t.TempDir())
+	avoidanceStore := avoidance.NewStore(t.TempDir())
+	surfaceStore := surfacemarks.NewStore(t.TempDir())
+	server := NewServer(config.Config{}, fakePlanner{}, fakeGeocoder{}, strava.Client{}, &historyStore, &avoidanceStore, &surfaceStore)
+
+	addResp := httptest.NewRecorder()
+	addReq := httptest.NewRequest(http.MethodPost, "/api/surface-marks", strings.NewReader(`{"osmWayId":42,"name":"Mystery Lane","surface":"paved","coordinate":{"lat":50.1,"lon":4.7}}`))
+	server.Routes().ServeHTTP(addResp, addReq)
+	if addResp.Code != http.StatusCreated {
+		t.Fatalf("surface mark add code = %d, want 201; body %s", addResp.Code, addResp.Body.String())
+	}
+
+	listResp := httptest.NewRecorder()
+	server.Routes().ServeHTTP(listResp, httptest.NewRequest(http.MethodGet, "/api/surface-marks", nil))
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("surface mark list code = %d, want 200", listResp.Code)
+	}
+	var roads []surfacemarks.Road
+	if err := json.NewDecoder(listResp.Body).Decode(&roads); err != nil {
+		t.Fatalf("decode marked roads: %v", err)
+	}
+	if len(roads) != 1 || roads[0].ID != "way:42" || roads[0].Surface != surfacemarks.SurfacePaved {
+		t.Fatalf("marked roads = %+v, want paved way:42", roads)
+	}
+
+	deleteResp := httptest.NewRecorder()
+	server.Routes().ServeHTTP(deleteResp, httptest.NewRequest(http.MethodDelete, "/api/surface-marks/way%3A42", nil))
+	if deleteResp.Code != http.StatusOK {
+		t.Fatalf("surface mark delete code = %d, want 200", deleteResp.Code)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/EDessin/RouteRoulette/backend/internal/ors"
 	"github.com/EDessin/RouteRoulette/backend/internal/planner"
 	"github.com/EDessin/RouteRoulette/backend/internal/strava"
+	"github.com/EDessin/RouteRoulette/backend/internal/surfacemarks"
 )
 
 func main() {
@@ -20,6 +21,7 @@ func main() {
 
 	historyStore := history.NewStore(cfg.HistoryDataDir)
 	avoidanceStore := avoidance.NewStore(cfg.AvoidanceDataDir)
+	surfaceMarksStore := surfacemarks.NewStore(cfg.SurfaceMarksDataDir)
 	stravaClient := strava.NewClient(strava.Config{
 		ClientID:     cfg.StravaClientID,
 		ClientSecret: cfg.StravaClientSecret,
@@ -37,10 +39,11 @@ func main() {
 			AllowDownload:  cfg.AllowOSMDownload,
 			HistoryStore:   &historyStore,
 			AvoidanceStore: &avoidanceStore,
+			SurfaceStore:   &surfaceMarksStore,
 		})
 	}
 	routePlanner := planner.New(routeProvider, cfg.AllowMockRoutes)
-	server := api.NewServer(cfg, routePlanner, orsClient, stravaClient, &historyStore, &avoidanceStore)
+	server := api.NewServer(cfg, routePlanner, orsClient, stravaClient, &historyStore, &avoidanceStore, &surfaceMarksStore)
 
 	log.Printf("RouteRoulette API listening on :%s", cfg.Port)
 	log.Printf("Routing provider: %s", cfg.RoutingProvider)

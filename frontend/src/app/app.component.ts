@@ -16,6 +16,8 @@ import {
   AvoidedRoad,
   Coordinate,
   HistoryStatus,
+  MarkedRoad,
+  MarkedRoadSurface,
   RouteApiService,
   RouteResponse,
   RouteSegment,
@@ -52,21 +54,31 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
   route?: RouteResponse;
   historyStatus?: HistoryStatus;
   avoidedRoads: AvoidedRoad[] = [];
+  markedRoads: MarkedRoad[] = [];
   errorMessage = '';
   historyMessage = '';
   avoidanceMessage = '';
+  surfaceMessage = '';
   isGenerating = false;
   isSyncingHistory = false;
   isSavingAvoidedRoad = false;
-  avoidDialogVisible = false;
+  isSavingMarkedRoad = false;
+  roadDialogVisible = false;
+  avoidedRoadsCollapsed = true;
+  markedRoadsCollapsed = true;
   selectedSegment?: RouteSegment;
   selectedSegmentCoordinate?: Coordinate;
   selectedAvoidanceReason: AvoidanceReason = 'busy_road';
+  selectedMarkedSurface: MarkedRoadSurface = 'paved';
   avoidanceReasonOptions = [
     { label: 'Busy road', value: 'busy_road' },
     { label: 'No lights', value: 'no_lights' },
     { label: 'Not accessible', value: 'not_accessible' },
     { label: 'Other', value: 'other' },
+  ];
+  surfaceMarkOptions = [
+    { label: 'Paved', value: 'paved' },
+    { label: 'Unpaved', value: 'unpaved' },
   ];
 
   private homeLat = 50.9950381;
@@ -82,6 +94,7 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
   ngOnInit(): void {
     this.loadHistoryStatus();
     this.loadAvoidedRoads();
+    this.loadMarkedRoads();
   }
 
   ngAfterViewInit(): void {
@@ -173,7 +186,7 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
       .subscribe({
         next: () => {
           this.isSavingAvoidedRoad = false;
-          this.avoidDialogVisible = false;
+          this.roadDialogVisible = false;
           this.avoidanceMessage = 'Road added to your avoid list.';
           this.loadAvoidedRoads();
         },
@@ -198,6 +211,50 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
     });
   }
 
+  saveMarkedRoad(): void {
+    if (!this.selectedSegment?.osmWayId || !this.selectedSegmentCoordinate) {
+      this.errorMessage = 'This route segment does not have road metadata and cannot be marked yet.';
+      return;
+    }
+
+    this.errorMessage = '';
+    this.surfaceMessage = '';
+    this.isSavingMarkedRoad = true;
+    this.routeApi
+      .markRoadSurface({
+        osmWayId: this.selectedSegment.osmWayId,
+        name: this.selectedSegment.name,
+        surface: this.selectedMarkedSurface,
+        coordinate: this.selectedSegmentCoordinate,
+      })
+      .subscribe({
+        next: () => {
+          this.isSavingMarkedRoad = false;
+          this.roadDialogVisible = false;
+          this.surfaceMessage = 'Road surface saved.';
+          this.loadMarkedRoads();
+        },
+        error: (err: HttpErrorResponse) => {
+          this.isSavingMarkedRoad = false;
+          this.errorMessage = this.errorText(err);
+        },
+      });
+  }
+
+  removeMarkedRoad(road: MarkedRoad): void {
+    this.errorMessage = '';
+    this.surfaceMessage = '';
+    this.routeApi.deleteMarkedRoad(road.id).subscribe({
+      next: () => {
+        this.surfaceMessage = 'Road surface mark removed.';
+        this.loadMarkedRoads();
+      },
+      error: (err: HttpErrorResponse) => {
+        this.errorMessage = this.errorText(err);
+      },
+    });
+  }
+
   generateRoute(): void {
     if (!this.isValidForm()) {
       this.errorMessage = 'Check the home address, route length, and pace.';
@@ -205,6 +262,8 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
     }
 
     this.errorMessage = '';
+    this.avoidanceMessage = '';
+    this.surfaceMessage = '';
     this.isGenerating = true;
 
     this.routeApi
@@ -292,6 +351,17 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
     });
   }
 
+  private loadMarkedRoads(): void {
+    this.routeApi.getMarkedRoads().subscribe({
+      next: (roads) => {
+        this.markedRoads = roads;
+      },
+      error: () => {
+        this.markedRoads = [];
+      },
+    });
+  }
+
   private drawHomeMarker(): void {
     if (!this.map) {
       return;
@@ -342,7 +412,7 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
         interactive: true,
         renderer: this.routeRenderer,
       })
-        .on('click', (event: L.LeafletMouseEvent) => this.openAvoidDialog(segment, event.latlng))
+        .on('click', (event: L.LeafletMouseEvent) => this.openRoadDialog(segment, event.latlng))
         .addTo(group);
     }
 
@@ -391,11 +461,12 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
     this.map.setView(home, selectedZoom, { animate: false });
   }
 
-  private openAvoidDialog(segment: RouteSegment, latLng: L.LatLng): void {
+  private openRoadDialog(segment: RouteSegment, latLng: L.LatLng): void {
     this.selectedSegment = segment;
     this.selectedSegmentCoordinate = { lat: latLng.lat, lon: latLng.lng };
     this.selectedAvoidanceReason = 'busy_road';
-    this.avoidDialogVisible = true;
+    this.selectedMarkedSurface = 'paved';
+    this.roadDialogVisible = true;
   }
 
   private routeToGpx(route: RouteResponse): string {
@@ -466,5 +537,9 @@ ${trackPoints}
       default:
         return 'Other';
     }
+  }
+
+  surfaceLabel(surface: MarkedRoadSurface): string {
+    return surface === 'paved' ? 'Paved' : 'Unpaved';
   }
 }

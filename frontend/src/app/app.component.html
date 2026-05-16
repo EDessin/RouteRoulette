@@ -40,32 +40,81 @@
       </div>
     </section>
 
-    <section class="avoidance-panel" aria-label="Avoided roads">
-      <div>
+    <section class="road-list-panel" aria-label="Avoided roads">
+      <button
+        type="button"
+        class="panel-toggle"
+        (click)="avoidedRoadsCollapsed = !avoidedRoadsCollapsed"
+        [attr.aria-expanded]="!avoidedRoadsCollapsed"
+      >
         <strong>Avoided roads</strong>
         <span>{{ avoidedRoads.length }} saved</span>
-      </div>
-      @if (avoidedRoads.length > 0) {
-        <ul>
-          @for (road of avoidedRoads; track road.id) {
-            <li>
-              <span>
-                <strong>{{ road.name || 'Unnamed road' }}</strong>
-                <small>{{ reasonLabel(road.reason) }}</small>
-              </span>
-              <button
-                pButton
-                type="button"
-                icon="pi pi-times"
-                severity="secondary"
-                [rounded]="true"
-                [text]="true"
-                (click)="removeAvoidedRoad(road)"
-                [attr.aria-label]="'Remove ' + (road.name || 'road')"
-              ></button>
-            </li>
-          }
-        </ul>
+        <i class="pi" [class.pi-chevron-down]="avoidedRoadsCollapsed" [class.pi-chevron-up]="!avoidedRoadsCollapsed"></i>
+      </button>
+      @if (!avoidedRoadsCollapsed) {
+        @if (avoidedRoads.length > 0) {
+          <ul>
+            @for (road of avoidedRoads; track road.id) {
+              <li>
+                <span>
+                  <strong>{{ road.name || 'Unnamed road' }}</strong>
+                  <small>{{ reasonLabel(road.reason) }}</small>
+                </span>
+                <button
+                  pButton
+                  type="button"
+                  icon="pi pi-times"
+                  severity="secondary"
+                  [rounded]="true"
+                  [text]="true"
+                  (click)="removeAvoidedRoad(road)"
+                  [attr.aria-label]="'Remove ' + (road.name || 'road')"
+                ></button>
+              </li>
+            }
+          </ul>
+        } @else {
+          <p>No avoided roads saved.</p>
+        }
+      }
+    </section>
+
+    <section class="road-list-panel" aria-label="Marked road surfaces">
+      <button
+        type="button"
+        class="panel-toggle"
+        (click)="markedRoadsCollapsed = !markedRoadsCollapsed"
+        [attr.aria-expanded]="!markedRoadsCollapsed"
+      >
+        <strong>Marked roads</strong>
+        <span>{{ markedRoads.length }} saved</span>
+        <i class="pi" [class.pi-chevron-down]="markedRoadsCollapsed" [class.pi-chevron-up]="!markedRoadsCollapsed"></i>
+      </button>
+      @if (!markedRoadsCollapsed) {
+        @if (markedRoads.length > 0) {
+          <ul>
+            @for (road of markedRoads; track road.id) {
+              <li>
+                <span>
+                  <strong>{{ road.name || 'Unnamed road' }}</strong>
+                  <small>{{ surfaceLabel(road.surface) }}</small>
+                </span>
+                <button
+                  pButton
+                  type="button"
+                  icon="pi pi-times"
+                  severity="secondary"
+                  [rounded]="true"
+                  [text]="true"
+                  (click)="removeMarkedRoad(road)"
+                  [attr.aria-label]="'Remove surface mark for ' + (road.name || 'road')"
+                ></button>
+              </li>
+            }
+          </ul>
+        } @else {
+          <p>No road surfaces marked.</p>
+        }
       }
     </section>
 
@@ -135,6 +184,10 @@
 
     @if (avoidanceMessage) {
       <p-message severity="success" [text]="avoidanceMessage" />
+    }
+
+    @if (surfaceMessage) {
+      <p-message severity="success" [text]="surfaceMessage" />
     }
 
     @if (route) {
@@ -213,31 +266,52 @@
 </main>
 
 <p-dialog
-  header="Avoid this road"
-  [(visible)]="avoidDialogVisible"
+  header="Road options"
+  [(visible)]="roadDialogVisible"
   [modal]="true"
   [draggable]="false"
   [resizable]="false"
-  [style]="{ width: 'min(28rem, calc(100vw - 2rem))' }"
+  [style]="{ width: 'min(34rem, calc(100vw - 2rem))' }"
 >
-  <div class="avoid-dialog">
+  <div class="road-dialog">
     <div>
       <span>Road</span>
       <strong>{{ selectedSegment?.name || 'Unnamed road' }}</strong>
     </div>
-    <label class="field">
-      <span>Reason</span>
-      <p-selectbutton
-        [(ngModel)]="selectedAvoidanceReason"
-        name="selectedAvoidanceReason"
-        [options]="avoidanceReasonOptions"
-        optionLabel="label"
-        optionValue="value"
-        [allowEmpty]="false"
-      />
-    </label>
-    <div class="dialog-actions">
-      <button pButton type="button" label="Cancel" severity="secondary" (click)="avoidDialogVisible = false"></button>
+    <section>
+      <label class="field">
+        <span>Mark road</span>
+        <p-selectbutton
+          [(ngModel)]="selectedMarkedSurface"
+          name="selectedMarkedSurface"
+          [options]="surfaceMarkOptions"
+          optionLabel="label"
+          optionValue="value"
+          [allowEmpty]="false"
+        />
+      </label>
+      <button
+        pButton
+        type="button"
+        icon="pi pi-check"
+        label="Mark road"
+        severity="secondary"
+        [loading]="isSavingMarkedRoad"
+        (click)="saveMarkedRoad()"
+      ></button>
+    </section>
+    <section>
+      <label class="field">
+        <span>Avoid road</span>
+        <p-selectbutton
+          [(ngModel)]="selectedAvoidanceReason"
+          name="selectedAvoidanceReason"
+          [options]="avoidanceReasonOptions"
+          optionLabel="label"
+          optionValue="value"
+          [allowEmpty]="false"
+        />
+      </label>
       <button
         pButton
         type="button"
@@ -246,6 +320,9 @@
         [loading]="isSavingAvoidedRoad"
         (click)="saveAvoidedRoad()"
       ></button>
+    </section>
+    <div class="dialog-actions">
+      <button pButton type="button" label="Cancel" severity="secondary" (click)="roadDialogVisible = false"></button>
     </div>
   </div>
 </p-dialog>

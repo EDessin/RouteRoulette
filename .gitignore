@@ -9,6 +9,8 @@ backend/data/history/*
 !backend/data/history/.gitkeep
 backend/data/avoidance/*
 !backend/data/avoidance/.gitkeep
+backend/data/surface-marks/*
+!backend/data/surface-marks/.gitkeep
 
 # Angular / Node
 frontend/.angular/

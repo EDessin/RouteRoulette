@@ -68,7 +68,7 @@
   gap: 0.5rem 0.75rem;
 }
 
-.avoidance-panel {
+.road-list-panel {
   display: grid;
   gap: 0.75rem;
   padding: 0.875rem;
@@ -77,19 +77,33 @@
   background: #fbfdfc;
 }
 
-.avoidance-panel > div:first-child {
-  display: flex;
-  justify-content: space-between;
+.panel-toggle {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
   gap: 0.75rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
-.avoidance-panel span,
-.avoidance-panel small {
+.panel-toggle span,
+.road-list-panel span,
+.road-list-panel small,
+.road-list-panel p {
   color: #617066;
   font-size: 0.85rem;
 }
 
-.avoidance-panel ul {
+.road-list-panel p {
+  margin: 0;
+}
+
+.road-list-panel ul {
   display: grid;
   gap: 0.35rem;
   margin: 0;
@@ -97,20 +111,20 @@
   list-style: none;
 }
 
-.avoidance-panel li {
+.road-list-panel li {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.5rem;
 }
 
-.avoidance-panel li > span {
+.road-list-panel li > span {
   display: grid;
   gap: 0.1rem;
   min-width: 0;
 }
 
-.avoidance-panel strong {
+.road-list-panel strong {
   color: #17201b;
   overflow-wrap: anywhere;
 }
@@ -223,24 +237,31 @@ p {
   color: #7c2d12;
 }
 
-.avoid-dialog {
+.road-dialog {
   display: grid;
   gap: 1rem;
 }
 
-.avoid-dialog > div:first-child {
+.road-dialog > div:first-child {
   display: grid;
   gap: 0.2rem;
 }
 
-.avoid-dialog > div:first-child span {
+.road-dialog > div:first-child span {
   color: #617066;
   font-size: 0.85rem;
 }
 
-.avoid-dialog > div:first-child strong {
+.road-dialog > div:first-child strong {
   color: #17201b;
   overflow-wrap: anywhere;
+}
+
+.road-dialog section {
+  display: grid;
+  gap: 0.75rem;
+  padding-top: 1rem;
+  border-top: 1px solid #d9e2db;
 }
 
 .dialog-actions {

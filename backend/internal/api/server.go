@@ -14,6 +14,7 @@ import (
 	"github.com/EDessin/RouteRoulette/backend/internal/history"
 	"github.com/EDessin/RouteRoulette/backend/internal/planner"
 	"github.com/EDessin/RouteRoulette/backend/internal/strava"
+	"github.com/EDessin/RouteRoulette/backend/internal/surfacemarks"
 )
 
 type RoutePlanner interface {
@@ -31,9 +32,10 @@ type Server struct {
 	stravaClient   strava.Client
 	historyStore   *history.Store
 	avoidanceStore *avoidance.Store
+	surfaceStore   *surfacemarks.Store
 }
 
-func NewServer(cfg config.Config, routePlanner RoutePlanner, geocoder Geocoder, stravaClient strava.Client, historyStore *history.Store, avoidanceStore *avoidance.Store) Server {
+func NewServer(cfg config.Config, routePlanner RoutePlanner, geocoder Geocoder, stravaClient strava.Client, historyStore *history.Store, avoidanceStore *avoidance.Store, surfaceStore *surfacemarks.Store) Server {
 	return Server{
 		cfg:            cfg,
 		planner:        routePlanner,
@@ -41,6 +43,7 @@ func NewServer(cfg config.Config, routePlanner RoutePlanner, geocoder Geocoder, 
 		stravaClient:   stravaClient,
 		historyStore:   historyStore,
 		avoidanceStore: avoidanceStore,
+		surfaceStore:   surfaceStore,
 	}
 }
 
@@ -57,6 +60,9 @@ func (s Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/avoidance", s.handleAvoidanceList)
 	mux.HandleFunc("POST /api/avoidance", s.handleAvoidanceAdd)
 	mux.HandleFunc("DELETE /api/avoidance/{id}", s.handleAvoidanceDelete)
+	mux.HandleFunc("GET /api/surface-marks", s.handleSurfaceMarksList)
+	mux.HandleFunc("POST /api/surface-marks", s.handleSurfaceMarksAdd)
+	mux.HandleFunc("DELETE /api/surface-marks/{id}", s.handleSurfaceMarksDelete)
 
 	return s.withCORS(mux)
 }
@@ -200,6 +206,48 @@ func (s Server) handleAvoidanceDelete(w http.ResponseWriter, r *http.Request) {
 	if err := s.avoidanceStore.Delete(id); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			writeError(w, http.StatusNotFound, "Avoided road not found.")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (s Server) handleSurfaceMarksList(w http.ResponseWriter, _ *http.Request) {
+	roads, err := s.surfaceStore.List()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, roads)
+}
+
+func (s Server) handleSurfaceMarksAdd(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	var req surfacemarks.MarkRoadRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "The marked road request body is not valid JSON.")
+		return
+	}
+	road, err := s.surfaceStore.Mark(req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, road)
+}
+
+func (s Server) handleSurfaceMarksDelete(w http.ResponseWriter, r *http.Request) {
+	id, err := url.PathUnescape(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Marked road ID is not valid.")
+		return
+	}
+	if err := s.surfaceStore.Delete(id); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			writeError(w, http.StatusNotFound, "Marked road not found.")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())

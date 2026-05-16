@@ -10,6 +10,7 @@ import (
 	"github.com/EDessin/RouteRoulette/backend/internal/avoidance"
 	"github.com/EDessin/RouteRoulette/backend/internal/history"
 	"github.com/EDessin/RouteRoulette/backend/internal/planner"
+	"github.com/EDessin/RouteRoulette/backend/internal/surfacemarks"
 )
 
 func TestClassifySurface(t *testing.T) {
@@ -287,6 +288,27 @@ func TestPreferPavedDoesNotForcePavedOnlyBelowOneHundredPercent(t *testing.T) {
 func TestSurfacePolicyDefaultsToAssumePaved(t *testing.T) {
 	if got := surfacePolicy(planner.CandidateRequest{}); got != SurfacePolicyAssumePaved {
 		t.Fatalf("surfacePolicy() = %q, want %q", got, SurfacePolicyAssumePaved)
+	}
+}
+
+func TestApplySurfaceMarksOverridesOSMSurfaceTags(t *testing.T) {
+	graph := Graph{
+		Nodes: []GraphNode{
+			{Lat: 0, Lon: 0},
+			{Lat: 0, Lon: 0.001},
+		},
+		Edges: [][]GraphEdge{
+			{{To: 1, Distance: 1, Surface: SurfaceUnknown, OSMWayID: 42}},
+			{{To: 0, Distance: 1, Surface: SurfaceUnknown, OSMWayID: 42}},
+		},
+	}
+
+	graph.applySurfaceMarks(surfaceOverlay{RoadsByWayID: map[int64]surfacemarks.Road{
+		42: {OSMWayID: 42, Surface: surfacemarks.SurfaceUnpaved},
+	}})
+
+	if graph.Edges[0][0].Surface != SurfaceUnpaved || graph.Edges[1][0].Surface != SurfaceUnpaved {
+		t.Fatalf("surface mark was not applied to both directions: %+v", graph.Edges)
 	}
 }
 

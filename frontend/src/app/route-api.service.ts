@@ -81,12 +81,30 @@ export interface AvoidedRoad {
   createdAt: string;
 }
 
+export interface MarkedRoad {
+  id: string;
+  osmWayId: number;
+  name?: string;
+  surface: MarkedRoadSurface;
+  coordinate: Coordinate;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type AvoidanceReason = 'busy_road' | 'no_lights' | 'not_accessible' | 'other';
+export type MarkedRoadSurface = 'paved' | 'unpaved';
 
 export interface AddAvoidedRoadRequest {
   osmWayId: number;
   name?: string;
   reason: AvoidanceReason;
+  coordinate: Coordinate;
+}
+
+export interface MarkRoadSurfaceRequest {
+  osmWayId: number;
+  name?: string;
+  surface: MarkedRoadSurface;
   coordinate: Coordinate;
 }
 
@@ -124,5 +142,17 @@ export class RouteApiService {
 
   deleteAvoidedRoad(id: string): Observable<{ status: string }> {
     return this.http.delete<{ status: string }>(`/api/avoidance/${encodeURIComponent(id)}`);
+  }
+
+  getMarkedRoads(): Observable<MarkedRoad[]> {
+    return this.http.get<MarkedRoad[]>('/api/surface-marks');
+  }
+
+  markRoadSurface(request: MarkRoadSurfaceRequest): Observable<MarkedRoad> {
+    return this.http.post<MarkedRoad>('/api/surface-marks', request);
+  }
+
+  deleteMarkedRoad(id: string): Observable<{ status: string }> {
+    return this.http.delete<{ status: string }>(`/api/surface-marks/${encodeURIComponent(id)}`);
   }
 }

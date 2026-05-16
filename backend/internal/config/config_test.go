@@ -6,6 +6,7 @@ func TestLoadDefaultsToTwentyKilometerOSMRadius(t *testing.T) {
 	t.Setenv("OSM_RADIUS_KM", "")
 	t.Setenv("HISTORY_DATA_DIR", "")
 	t.Setenv("AVOIDANCE_DATA_DIR", "")
+	t.Setenv("SURFACE_MARKS_DATA_DIR", "")
 	t.Setenv("STRAVA_REDIRECT_URL", "")
 
 	cfg := Load()
@@ -17,6 +18,9 @@ func TestLoadDefaultsToTwentyKilometerOSMRadius(t *testing.T) {
 	}
 	if cfg.AvoidanceDataDir != "data/avoidance" {
 		t.Fatalf("AvoidanceDataDir = %q, want data/avoidance", cfg.AvoidanceDataDir)
+	}
+	if cfg.SurfaceMarksDataDir != "data/surface-marks" {
+		t.Fatalf("SurfaceMarksDataDir = %q, want data/surface-marks", cfg.SurfaceMarksDataDir)
 	}
 	if cfg.StravaRedirectURL != "http://localhost:8080/api/strava/callback" {
 		t.Fatalf("StravaRedirectURL = %q, want default callback", cfg.StravaRedirectURL)
