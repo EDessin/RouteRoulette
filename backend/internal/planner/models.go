@@ -33,6 +33,11 @@ type GenerateRouteRequest struct {
 	Seed                  *int64     `json:"seed,omitempty"`
 }
 
+type ImportRouteRequest struct {
+	Coordinates           []Coordinate `json:"coordinates"`
+	EstimatedPaceMinPerKm *float64     `json:"estimatedPaceMinPerKm,omitempty"`
+}
+
 type RouteResponse struct {
 	RouteID               string         `json:"routeId"`
 	Start                 Coordinate     `json:"start"`

@@ -19,6 +19,11 @@ export interface GenerateRouteRequest {
   seed?: number;
 }
 
+export interface ImportRouteRequest {
+  coordinates: Coordinate[];
+  estimatedPaceMinPerKm?: number;
+}
+
 export interface HistoryStatus {
   connected: boolean;
   syncedActivities: number;
@@ -119,6 +124,10 @@ export class RouteApiService {
 
   generateRoute(request: GenerateRouteRequest): Observable<RouteResponse> {
     return this.http.post<RouteResponse>('/api/routes/generate', request);
+  }
+
+  importRoute(request: ImportRouteRequest): Observable<RouteResponse> {
+    return this.http.post<RouteResponse>('/api/routes/import', request);
   }
 
   getHistoryStatus(): Observable<HistoryStatus> {

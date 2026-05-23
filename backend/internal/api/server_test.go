@@ -22,6 +22,14 @@ func (fakePlanner) Generate(_ *http.Request, _ planner.GenerateRouteRequest) (pl
 	return planner.RouteResponse{}, nil
 }
 
+func (fakePlanner) ImportRoute(_ *http.Request, _ planner.ImportRouteRequest) (planner.RouteResponse, error) {
+	return planner.RouteResponse{
+		RouteID:    "imported",
+		DistanceKm: 1.23,
+		Provider:   "local-osm-import",
+	}, nil
+}
+
 type fakeGeocoder struct{}
 
 func (fakeGeocoder) SearchAddress(_ *http.Request, _ string) (planner.GeocodeResponse, error) {
@@ -131,6 +139,28 @@ func TestAvoidanceEndpoints(t *testing.T) {
 	server.Routes().ServeHTTP(deleteResp, httptest.NewRequest(http.MethodDelete, "/api/avoidance/way%3A42", nil))
 	if deleteResp.Code != http.StatusOK {
 		t.Fatalf("avoidance delete code = %d, want 200", deleteResp.Code)
+	}
+}
+
+func TestImportRouteEndpoint(t *testing.T) {
+	historyStore := history.NewStore(t.TempDir())
+	avoidanceStore := avoidance.NewStore(t.TempDir())
+	surfaceStore := surfacemarks.NewStore(t.TempDir())
+	server := NewServer(config.Config{}, fakePlanner{}, fakeGeocoder{}, strava.Client{}, &historyStore, &avoidanceStore, &surfaceStore)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/routes/import", strings.NewReader(`{"coordinates":[{"lat":50.1,"lon":4.7},{"lat":50.2,"lon":4.8}]}`))
+	server.Routes().ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("import route code = %d, want 200; body %s", resp.Code, resp.Body.String())
+	}
+
+	var route planner.RouteResponse
+	if err := json.NewDecoder(resp.Body).Decode(&route); err != nil {
+		t.Fatalf("decode imported route: %v", err)
+	}
+	if route.RouteID != "imported" || route.Provider != "local-osm-import" {
+		t.Fatalf("imported route = %+v, want fake imported route", route)
 	}
 }
 

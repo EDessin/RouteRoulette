@@ -43,6 +43,7 @@ import {
 })
 export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
   @ViewChild('map', { static: true }) private readonly mapElement!: ElementRef<HTMLDivElement>;
+  @ViewChild('gpxInput') private readonly gpxInput?: ElementRef<HTMLInputElement>;
 
   homeAddress = 'Bossepleinstraat 121, 3130 Betekom';
   resolvedHomeLabel = this.homeAddress;
@@ -60,6 +61,7 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
   avoidanceMessage = '';
   surfaceMessage = '';
   isGenerating = false;
+  isImportingGpx = false;
   isSyncingHistory = false;
   isSavingAvoidedRoad = false;
   isSavingMarkedRoad = false;
@@ -288,6 +290,54 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
       });
   }
 
+  triggerGpxImport(): void {
+    this.gpxInput?.nativeElement.click();
+  }
+
+  importGpxFile(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) {
+      return;
+    }
+
+    this.errorMessage = '';
+    this.avoidanceMessage = '';
+    this.surfaceMessage = '';
+    this.isImportingGpx = true;
+
+    file
+      .text()
+      .then((content) => {
+        const coordinates = this.parseGpxCoordinates(content);
+        this.routeApi
+          .importRoute({
+            coordinates,
+            estimatedPaceMinPerKm: this.estimatedPaceMinPerKm,
+          })
+          .subscribe({
+            next: (route) => {
+              this.route = route;
+              this.isImportingGpx = false;
+              this.resolvedHomeLabel = file.name;
+              this.homeLat = route.start.lat;
+              this.homeLon = route.start.lon;
+              this.drawHomeMarker();
+              this.drawRoute(route);
+            },
+            error: (err: HttpErrorResponse) => {
+              this.isImportingGpx = false;
+              this.errorMessage = this.errorText(err);
+            },
+          });
+      })
+      .catch(() => {
+        this.isImportingGpx = false;
+        this.errorMessage = 'Could not read the selected GPX file.';
+      });
+  }
+
   private isValidForm(): boolean {
     return (
       this.homeAddress.trim().length >= 3 &&
@@ -332,6 +382,24 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
       lat: this.homeLat,
       lon: this.homeLon,
     };
+  }
+
+  private parseGpxCoordinates(content: string): Coordinate[] {
+    const document = new DOMParser().parseFromString(content, 'application/xml');
+    if (document.querySelector('parsererror')) {
+      throw new Error('invalid gpx');
+    }
+    const points = Array.from(document.querySelectorAll('trkpt, rtept'));
+    const coordinates = points
+      .map((point) => ({
+        lat: Number(point.getAttribute('lat')),
+        lon: Number(point.getAttribute('lon')),
+      }))
+      .filter((coordinate) => Number.isFinite(coordinate.lat) && Number.isFinite(coordinate.lon));
+    if (coordinates.length < 2) {
+      throw new Error('missing gpx points');
+    }
+    return coordinates;
   }
 
   private loadHistoryStatus(): void {

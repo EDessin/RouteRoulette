@@ -19,6 +19,7 @@ import (
 
 type RoutePlanner interface {
 	Generate(r *http.Request, req planner.GenerateRouteRequest) (planner.RouteResponse, error)
+	ImportRoute(r *http.Request, req planner.ImportRouteRequest) (planner.RouteResponse, error)
 }
 
 type Geocoder interface {
@@ -52,6 +53,7 @@ func (s Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("POST /api/geocode", s.handleGeocode)
 	mux.HandleFunc("POST /api/routes/generate", s.handleGenerateRoute)
+	mux.HandleFunc("POST /api/routes/import", s.handleImportRoute)
 	mux.HandleFunc("GET /api/strava/connect", s.handleStravaConnect)
 	mux.HandleFunc("GET /api/strava/callback", s.handleStravaCallback)
 	mux.HandleFunc("POST /api/strava/sync", s.handleStravaSync)
@@ -108,6 +110,31 @@ func (s Server) handleGenerateRoute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	route, err := s.planner.Generate(r, req)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, planner.ErrInvalidRequest) {
+			status = http.StatusBadRequest
+		}
+		if errors.Is(err, planner.ErrRouteUnavailable) {
+			status = http.StatusBadGateway
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, route)
+}
+
+func (s Server) handleImportRoute(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	var req planner.ImportRouteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "The imported route request body is not valid JSON.")
+		return
+	}
+
+	route, err := s.planner.ImportRoute(r, req)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, planner.ErrInvalidRequest) {

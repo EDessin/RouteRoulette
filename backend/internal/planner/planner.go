@@ -14,6 +14,10 @@ type RouteProvider interface {
 	GenerateRoundTrip(ctxReq *http.Request, req CandidateRequest) (CandidateRoute, error)
 }
 
+type RouteImporter interface {
+	ImportRoute(ctxReq *http.Request, req ImportRouteRequest) (CandidateRoute, error)
+}
+
 type plannerAttemptProvider interface {
 	PlannerAttempts() int
 }
@@ -49,6 +53,30 @@ func (p Planner) Generate(r *http.Request, req GenerateRouteRequest) (RouteRespo
 	}
 
 	return routeResponse(best, req, nil), nil
+}
+
+func (p Planner) ImportRoute(r *http.Request, req ImportRouteRequest) (RouteResponse, error) {
+	if err := validateImport(req); err != nil {
+		return RouteResponse{}, err
+	}
+
+	importer, ok := p.provider.(RouteImporter)
+	if !ok {
+		return RouteResponse{}, fmt.Errorf("%w: route provider cannot import GPX routes", ErrRouteUnavailable)
+	}
+
+	route, err := importer.ImportRoute(r, req)
+	if err != nil {
+		return RouteResponse{}, fmt.Errorf("%w: %v", ErrRouteUnavailable, err)
+	}
+
+	responseReq := GenerateRouteRequest{
+		TargetDistanceKm:      route.DistanceM / 1000,
+		EstimatedPaceMinPerKm: req.EstimatedPaceMinPerKm,
+	}
+	response := routeResponse(route, responseReq, nil)
+	response.Provider = route.Provider
+	return response, nil
 }
 
 func (p Planner) bestCandidate(r *http.Request, req GenerateRouteRequest, targetM float64, seed int64) (CandidateRoute, error) {
@@ -215,6 +243,24 @@ func validate(req GenerateRouteRequest) error {
 	}
 	if req.SurfacePolicy != "" && req.SurfacePolicy != "strict" && req.SurfacePolicy != "assume_paved" {
 		return fmt.Errorf("%w: surfacePolicy must be strict or assume_paved", ErrInvalidRequest)
+	}
+	return nil
+}
+
+func validateImport(req ImportRouteRequest) error {
+	if len(req.Coordinates) < 2 {
+		return fmt.Errorf("%w: imported GPX route must contain at least two track points", ErrInvalidRequest)
+	}
+	if len(req.Coordinates) > 10000 {
+		return fmt.Errorf("%w: imported GPX route contains too many track points", ErrInvalidRequest)
+	}
+	for _, coord := range req.Coordinates {
+		if coord.Lat < -90 || coord.Lat > 90 || coord.Lon < -180 || coord.Lon > 180 {
+			return fmt.Errorf("%w: imported GPX contains coordinates outside the valid latitude/longitude range", ErrInvalidRequest)
+		}
+	}
+	if req.EstimatedPaceMinPerKm != nil && (*req.EstimatedPaceMinPerKm < 2 || *req.EstimatedPaceMinPerKm > 20) {
+		return fmt.Errorf("%w: estimatedPaceMinPerKm must be between 2 and 20", ErrInvalidRequest)
 	}
 	return nil
 }

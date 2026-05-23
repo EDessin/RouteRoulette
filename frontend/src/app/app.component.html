@@ -172,6 +172,16 @@
       </label>
 
       <button pButton type="submit" icon="pi pi-directions" label="Generate route" [loading]="isGenerating"></button>
+      <input #gpxInput type="file" accept=".gpx,application/gpx+xml,application/xml,text/xml" hidden (change)="importGpxFile($event)" />
+      <button
+        pButton
+        type="button"
+        icon="pi pi-upload"
+        label="Import GPX"
+        severity="secondary"
+        [loading]="isImportingGpx"
+        (click)="triggerGpxImport()"
+      ></button>
     </form>
 
     @if (errorMessage) {

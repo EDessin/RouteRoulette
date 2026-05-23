@@ -203,6 +203,44 @@ func (p Provider) GenerateRoundTrip(ctxReq *http.Request, req planner.CandidateR
 	return route, nil
 }
 
+func (p Provider) ImportRoute(ctxReq *http.Request, req planner.ImportRouteRequest) (planner.CandidateRoute, error) {
+	started := time.Now()
+	home := req.Coordinates[0]
+	graph, err := p.loadGraph(ctxReq.Context(), home)
+	if err != nil {
+		return planner.CandidateRoute{}, err
+	}
+
+	rawDistanceM := coordinatePathDistanceM(req.Coordinates)
+	routeGraph, subgraphRadiusKm, err := graph.routeSubgraph(home, rawDistanceM, false, SurfacePolicyAssumePaved)
+	if err != nil {
+		return planner.CandidateRoute{}, err
+	}
+	if p.cfg.SurfaceStore != nil {
+		marks, err := p.loadSurfaceMarks()
+		if err != nil {
+			return planner.CandidateRoute{}, err
+		}
+		routeGraph.applySurfaceMarks(marks)
+	}
+
+	route, err := routeGraph.importCoordinateRoute(req.Coordinates)
+	if err != nil {
+		return planner.CandidateRoute{}, err
+	}
+	log.Printf("local-osm route imported: total=%s full_nodes=%d full_directed_edges=%d route_nodes=%d route_directed_edges=%d subgraph_radius_km=%.1f raw_distance_km=%.2f snapped_distance_km=%.2f",
+		time.Since(started).Round(time.Millisecond),
+		len(graph.Nodes),
+		graph.directedEdgeCount(),
+		len(routeGraph.Nodes),
+		routeGraph.directedEdgeCount(),
+		subgraphRadiusKm,
+		rawDistanceM/1000,
+		route.DistanceM/1000,
+	)
+	return route, nil
+}
+
 func (p Provider) PlannerAttempts() int {
 	return 1
 }
@@ -1274,6 +1312,121 @@ func (g *Graph) nodeDistanceM(a int, b int) float64 {
 	from := g.Nodes[a]
 	to := g.Nodes[b]
 	return distanceM(from.Lat, from.Lon, to.Lat, to.Lon)
+}
+
+func (g *Graph) importCoordinateRoute(coords []planner.Coordinate) (planner.CandidateRoute, error) {
+	sampled := downsampleImportCoordinates(coords)
+	if len(sampled) < 2 {
+		return planner.CandidateRoute{}, errors.New("imported route has too few usable points")
+	}
+
+	points := make([]int, 0, len(sampled))
+	lastNode := -1
+	for _, coord := range sampled {
+		node := g.nearestNode(coord)
+		if node < 0 {
+			return planner.CandidateRoute{}, errors.New("could not snap imported route to local OSM roads")
+		}
+		if node == lastNode {
+			continue
+		}
+		points = append(points, node)
+		lastNode = node
+	}
+	if len(points) < 2 {
+		return planner.CandidateRoute{}, errors.New("imported route snapped to too few local OSM road points")
+	}
+
+	search := g.newSearchWorkspace()
+	search.Deadline = time.Now().Add(routeGenerationBudget)
+	fullPath := []int{}
+	edges := []GraphEdge{}
+	for i := 1; i < len(points); i++ {
+		from := points[i-1]
+		to := points[i]
+		if from == to {
+			continue
+		}
+		directM := g.nodeDistanceM(from, to)
+		boundsTargetM := math.Max(1000, directM*4)
+		search.Bounds = g.newRouteSearchBounds([]int{from, to}, boundsTargetM, 0, false, SurfacePolicyAssumePaved)
+		path, pathEdges, err := g.shortestPath(from, to, 0, false, SurfacePolicyAssumePaved, nil, nil, nil, search)
+		if err != nil {
+			return planner.CandidateRoute{}, fmt.Errorf("could not follow imported GPX on local OSM roads: %w", err)
+		}
+		if i > 1 && len(path) > 0 {
+			path = path[1:]
+		}
+		fullPath = append(fullPath, path...)
+		edges = append(edges, pathEdges...)
+	}
+	if len(fullPath) < 2 {
+		return planner.CandidateRoute{}, errors.New("imported route path is too short")
+	}
+	return buildImportedRoute(g, fullPath, edges)
+}
+
+func buildImportedRoute(g *Graph, path []int, edges []GraphEdge) (planner.CandidateRoute, error) {
+	total, taggedPaved, unpaved, unknown := edgeStats(edges)
+	if total == 0 {
+		return planner.CandidateRoute{}, errors.New("imported route has zero distance")
+	}
+
+	coords := make([][]float64, 0, len(path))
+	for _, idx := range path {
+		node := g.Nodes[idx]
+		coords = append(coords, []float64{node.Lon, node.Lat})
+	}
+	startNode := g.Nodes[path[0]]
+	paved := round(taggedPaved/total*100, 1)
+	unpavedPercent := round(unpaved/total*100, 1)
+	unknownPercent := round(unknown/total*100, 1)
+	avoidedDistance := 0.0
+	return planner.CandidateRoute{
+		Start:           planner.Coordinate{Lat: startNode.Lat, Lon: startNode.Lon},
+		DistanceM:       total,
+		DurationSeconds: (total / 1000) * 360,
+		Geometry: planner.GeoJSONLine{
+			Type:        "LineString",
+			Coordinates: coords,
+		},
+		PavedPercent:         &paved,
+		UnpavedPercent:       &unpavedPercent,
+		UnknownPercent:       &unknownPercent,
+		AvoidedRoadDistanceM: &avoidedDistance,
+		Segments:             routeSegments(path, edges),
+		Provider:             "local-osm-import",
+	}, nil
+}
+
+func downsampleImportCoordinates(coords []planner.Coordinate) []planner.Coordinate {
+	if len(coords) <= 2 {
+		return append([]planner.Coordinate{}, coords...)
+	}
+	totalM := coordinatePathDistanceM(coords)
+	minSpacingM := math.Max(60, totalM/500)
+	sampled := []planner.Coordinate{coords[0]}
+	last := coords[0]
+	for _, coord := range coords[1 : len(coords)-1] {
+		if distanceM(last.Lat, last.Lon, coord.Lat, coord.Lon) < minSpacingM {
+			continue
+		}
+		sampled = append(sampled, coord)
+		last = coord
+	}
+	lastCoord := coords[len(coords)-1]
+	if sampled[len(sampled)-1] != lastCoord {
+		sampled = append(sampled, lastCoord)
+	}
+	return sampled
+}
+
+func coordinatePathDistanceM(coords []planner.Coordinate) float64 {
+	total := 0.0
+	for i := 1; i < len(coords); i++ {
+		total += distanceM(coords[i-1].Lat, coords[i-1].Lon, coords[i].Lat, coords[i].Lon)
+	}
+	return total
 }
 
 type edgeKey struct {
