@@ -13,6 +13,7 @@ export interface GenerateRouteRequest {
   maxStartDistanceKm: number;
   estimatedPaceMinPerKm?: number;
   preferPaved: boolean;
+  preferUnpaved: boolean;
   minPavedPercent: number;
   surfacePolicy?: 'strict' | 'assume_paved';
   preferUnrunRoads: boolean;

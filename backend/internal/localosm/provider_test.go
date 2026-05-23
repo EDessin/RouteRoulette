@@ -228,7 +228,7 @@ func TestLocalScorePenalizesRoutesMoreThanHalfKilometerLong(t *testing.T) {
 		PavedPercent: 70,
 	}
 
-	if localScore(withinLimit, targetM, 70, false) >= localScore(overLimit, targetM, 70, false) {
+	if localScore(withinLimit, targetM, 70, false, false) >= localScore(overLimit, targetM, 70, false, false) {
 		t.Fatal("expected local scoring to penalize routes more than 0.5 km longer than requested")
 	}
 }
@@ -247,7 +247,7 @@ func TestLocalScorePenalizesPreviouslyRunRoadsWhenPreferred(t *testing.T) {
 		PreviouslyRunPercent: 50,
 	}
 
-	if localScore(unrunRoute, targetM, 90, true) >= localScore(previouslyRunRoute, targetM, 90, true) {
+	if localScore(unrunRoute, targetM, 90, true, false) >= localScore(previouslyRunRoute, targetM, 90, true, false) {
 		t.Fatal("expected local scoring to prefer unrun roads")
 	}
 }
@@ -264,8 +264,25 @@ func TestLocalScoreIgnoresPavedDifferenceWithoutMinimum(t *testing.T) {
 		PavedPercent: 0,
 	}
 
-	if localScore(pavedRoute, targetM, 0, false) != localScore(unpavedRoute, targetM, 0, false) {
+	if localScore(pavedRoute, targetM, 0, false, false) != localScore(unpavedRoute, targetM, 0, false, false) {
 		t.Fatal("expected paved percentage to be ignored when no minimum paved percentage is requested")
+	}
+}
+
+func TestLocalScorePrefersUnpavedRoadsWhenRequested(t *testing.T) {
+	targetM := 2000.0
+
+	pavedRoute := localCandidate{
+		DistanceM:      2000,
+		UnpavedPercent: 0,
+	}
+	unpavedRoute := localCandidate{
+		DistanceM:      2000,
+		UnpavedPercent: 70,
+	}
+
+	if localScore(unpavedRoute, targetM, 0, false, true) >= localScore(pavedRoute, targetM, 0, false, true) {
+		t.Fatal("expected local scoring to prefer routes with more unpaved road")
 	}
 }
 
@@ -282,6 +299,36 @@ func TestPreferPavedDoesNotForcePavedOnlyBelowOneHundredPercent(t *testing.T) {
 	req.MinPavedPercent = 100
 	if !pavedOnly(req) {
 		t.Fatal("expected 100% paved preference to keep paved-only filtering")
+	}
+}
+
+func TestShortestPathPrefersUnpavedEdgesWhenRequested(t *testing.T) {
+	graph := Graph{
+		Nodes: []GraphNode{
+			{Lat: 0, Lon: 0},
+			{Lat: 0, Lon: 0},
+			{Lat: 0, Lon: 0},
+		},
+		Edges: make([][]GraphEdge, 3),
+	}
+	graph.Edges[0] = append(graph.Edges[0], GraphEdge{To: 1, Distance: 100, Surface: SurfacePaved})
+	graph.Edges[1] = append(graph.Edges[1], GraphEdge{To: 0, Distance: 100, Surface: SurfacePaved})
+	graph.Edges[0] = append(graph.Edges[0], GraphEdge{To: 2, Distance: 60, Surface: SurfaceUnpaved})
+	graph.Edges[2] = append(graph.Edges[2], GraphEdge{To: 0, Distance: 60, Surface: SurfaceUnpaved})
+	graph.Edges[2] = append(graph.Edges[2], GraphEdge{To: 1, Distance: 60, Surface: SurfaceUnpaved})
+	graph.Edges[1] = append(graph.Edges[1], GraphEdge{To: 2, Distance: 60, Surface: SurfaceUnpaved})
+
+	path, edges, err := graph.shortestPath(0, 1, 0, true, false, SurfacePolicyAssumePaved, nil, nil, nil, graph.newSearchWorkspace())
+	if err != nil {
+		t.Fatalf("shortestPath() returned error: %v", err)
+	}
+	if len(path) != 3 || path[0] != 0 || path[1] != 2 || path[2] != 1 {
+		t.Fatalf("shortestPath() path = %v, want [0 2 1]", path)
+	}
+	for _, edge := range edges {
+		if edge.Surface != SurfaceUnpaved {
+			t.Fatalf("expected unpaved-preferred path to use unpaved edges, got surface %d", edge.Surface)
+		}
 	}
 }
 
@@ -399,7 +446,7 @@ func TestCycleCandidateBuildsDisjointCycle(t *testing.T) {
 		Degree:  graph.usableDegree(1, true, SurfacePolicyStrict),
 	}
 
-	candidate, err := graph.cycleCandidate(0, 3900, 70, true, SurfacePolicyStrict, rand.New(rand.NewSource(1)), waypointSet{Nodes: []waypointNode{anchor}}, emptyHistoryOverlay(), emptyAvoidanceOverlay(), graph.newSearchWorkspace())
+	candidate, err := graph.cycleCandidate(0, 3900, 70, false, true, SurfacePolicyStrict, rand.New(rand.NewSource(1)), waypointSet{Nodes: []waypointNode{anchor}}, emptyHistoryOverlay(), emptyAvoidanceOverlay(), graph.newSearchWorkspace())
 	if err != nil {
 		t.Fatalf("cycleCandidate() returned error: %v", err)
 	}
@@ -436,7 +483,7 @@ func TestBlockLoopCandidateBuildsCompactDisjointCycle(t *testing.T) {
 		Degree:  graph.usableDegree(1, false, SurfacePolicyStrict),
 	}
 
-	candidate, err := graph.blockLoopCandidate(0, 3900, 0, false, SurfacePolicyStrict, rand.New(rand.NewSource(1)), waypointSet{Nodes: []waypointNode{anchor}}, emptyHistoryOverlay(), emptyAvoidanceOverlay(), graph.newSearchWorkspace())
+	candidate, err := graph.blockLoopCandidate(0, 3900, 0, false, false, SurfacePolicyStrict, rand.New(rand.NewSource(1)), waypointSet{Nodes: []waypointNode{anchor}}, emptyHistoryOverlay(), emptyAvoidanceOverlay(), graph.newSearchWorkspace())
 	if err != nil {
 		t.Fatalf("blockLoopCandidate() returned error: %v", err)
 	}
@@ -464,7 +511,7 @@ func TestLoopCandidateBuildsShortRouteWhenPavingAndHistoryAreDisabled(t *testing
 	addTestEdge(&graph, 3, 0, SurfacePaved)
 
 	waypoints := graph.newWaypointSet(0, 1000, false, SurfacePolicyStrict)
-	candidate, err := graph.loopCandidate(0, 1000, 0, false, SurfacePolicyStrict, rand.New(rand.NewSource(4)), waypoints, emptyHistoryOverlay(), emptyAvoidanceOverlay(), graph.newSearchWorkspace())
+	candidate, err := graph.loopCandidate(0, 1000, 0, false, false, SurfacePolicyStrict, rand.New(rand.NewSource(4)), waypoints, emptyHistoryOverlay(), emptyAvoidanceOverlay(), graph.newSearchWorkspace())
 	if err != nil {
 		t.Fatalf("loopCandidate() returned error: %v", err)
 	}
@@ -704,7 +751,7 @@ func TestShortestPathSkipsUnpavedEdgesWhenPavedOnly(t *testing.T) {
 		},
 	}
 
-	path, edges, err := graph.shortestPath(0, 1, 70, true, SurfacePolicyStrict, nil, nil, nil, graph.newSearchWorkspace())
+	path, edges, err := graph.shortestPath(0, 1, 70, false, true, SurfacePolicyStrict, nil, nil, nil, graph.newSearchWorkspace())
 	if err != nil {
 		t.Fatalf("shortestPath() returned error: %v", err)
 	}
@@ -736,7 +783,7 @@ func TestShortestPathAvoidsBlockedRoadSegments(t *testing.T) {
 		newEdgeKey(0, 1): {},
 	}
 
-	path, _, err := graph.shortestPath(0, 1, 70, true, SurfacePolicyStrict, blocked, nil, nil, graph.newSearchWorkspace())
+	path, _, err := graph.shortestPath(0, 1, 70, false, true, SurfacePolicyStrict, blocked, nil, nil, graph.newSearchWorkspace())
 	if err != nil {
 		t.Fatalf("shortestPath() returned error: %v", err)
 	}
@@ -766,7 +813,7 @@ func TestShortestPathPenalizesRecentlyRunRoadSegments(t *testing.T) {
 		newEdgeKey(0, 1): {},
 	}
 
-	path, _, err := graph.shortestPath(0, 1, 70, true, SurfacePolicyStrict, nil, recent, nil, graph.newSearchWorkspace())
+	path, _, err := graph.shortestPath(0, 1, 70, false, true, SurfacePolicyStrict, nil, recent, nil, graph.newSearchWorkspace())
 	if err != nil {
 		t.Fatalf("shortestPath() returned error: %v", err)
 	}
@@ -787,7 +834,7 @@ func TestShortestPathReturnsErrorWhenNoPavedPathExists(t *testing.T) {
 		},
 	}
 
-	if _, _, err := graph.shortestPath(0, 1, 70, true, SurfacePolicyStrict, nil, nil, nil, graph.newSearchWorkspace()); err == nil {
+	if _, _, err := graph.shortestPath(0, 1, 70, false, true, SurfacePolicyStrict, nil, nil, nil, graph.newSearchWorkspace()); err == nil {
 		t.Fatal("expected no paved-only path to return an error")
 	}
 }
@@ -804,7 +851,7 @@ func TestShortestPathAllowsUnknownSurfaceWhenAssumingNormalRoadsPaved(t *testing
 		},
 	}
 
-	path, _, err := graph.shortestPath(0, 1, 70, true, SurfacePolicyAssumePaved, nil, nil, nil, graph.newSearchWorkspace())
+	path, _, err := graph.shortestPath(0, 1, 70, false, true, SurfacePolicyAssumePaved, nil, nil, nil, graph.newSearchWorkspace())
 	if err != nil {
 		t.Fatalf("shortestPath() returned error: %v", err)
 	}

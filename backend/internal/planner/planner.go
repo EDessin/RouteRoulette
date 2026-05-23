@@ -101,6 +101,7 @@ func (p Planner) bestCandidate(r *http.Request, req GenerateRouteRequest, target
 			Home:             req.Home,
 			TargetDistanceM:  requestedDistanceM,
 			PreferPaved:      req.PreferPaved,
+			PreferUnpaved:    req.PreferUnpaved,
 			MinPavedPercent:  req.MinPavedPercent,
 			SurfacePolicy:    req.SurfacePolicy,
 			PreferUnrunRoads: req.PreferUnrunRoads,
@@ -111,13 +112,13 @@ func (p Planner) bestCandidate(r *http.Request, req GenerateRouteRequest, target
 			continue
 		}
 
-		score := routeScore(route, targetM, req.MinPavedPercent)
+		score := routeScore(route, targetM, req.MinPavedPercent, req.PreferUnpaved)
 		if score < bestScore {
 			best = route
 			bestScore = score
 		}
 
-		if isGoodEnough(route, targetM, req.MinPavedPercent) {
+		if isGoodEnough(route, targetM, req.MinPavedPercent, req.PreferUnpaved) {
 			return route, nil
 		}
 	}
@@ -143,7 +144,7 @@ func (p Planner) providerAttempts() int {
 	return attempts
 }
 
-func routeScore(route CandidateRoute, targetM float64, minPavedPercent float64) float64 {
+func routeScore(route CandidateRoute, targetM float64, minPavedPercent float64, preferUnpaved bool) float64 {
 	pavedShortfall := pavedShortfallRatio(route, minPavedPercent)
 	pavedGapToPerfect := pavedGapToPerfectRatio(route, minPavedPercent)
 	shortRoutePenalty := math.Max(0, targetM-route.DistanceM) / targetM
@@ -152,12 +153,16 @@ func routeScore(route CandidateRoute, targetM float64, minPavedPercent float64) 
 	if extraMeters > 500 {
 		extraDistancePenalty += (extraMeters - 500) / 10
 	}
-
-	if minPavedPercent > 0 {
-		return pavedShortfall*120 + pavedGapToPerfect*5 + shortRoutePenalty*50 + extraDistancePenalty
+	unpavedPreferencePenalty := 0.0
+	if preferUnpaved && route.UnpavedPercent != nil {
+		unpavedPreferencePenalty = math.Max(0, 100-*route.UnpavedPercent) / 100 * 5
 	}
 
-	return shortRoutePenalty*50 + extraDistancePenalty
+	if minPavedPercent > 0 {
+		return pavedShortfall*120 + pavedGapToPerfect*5 + shortRoutePenalty*50 + extraDistancePenalty + unpavedPreferencePenalty
+	}
+
+	return shortRoutePenalty*50 + extraDistancePenalty + unpavedPreferencePenalty
 }
 
 func pavedShortfallRatio(route CandidateRoute, minPavedPercent float64) float64 {
@@ -181,7 +186,10 @@ func pavedShortfallPercent(route CandidateRoute, minPavedPercent float64) float6
 	return math.Max(0, minPavedPercent-*route.PavedPercent)
 }
 
-func isGoodEnough(route CandidateRoute, targetM float64, minPavedPercent float64) bool {
+func isGoodEnough(route CandidateRoute, targetM float64, minPavedPercent float64, preferUnpaved bool) bool {
+	if preferUnpaved {
+		return false
+	}
 	return route.DistanceM >= targetM && pavedShortfallPercent(route, minPavedPercent) <= 5
 }
 
@@ -240,6 +248,12 @@ func validate(req GenerateRouteRequest) error {
 	}
 	if req.MinPavedPercent < 0 || req.MinPavedPercent > 100 {
 		return fmt.Errorf("%w: minPavedPercent must be between 0 and 100", ErrInvalidRequest)
+	}
+	if req.PreferPaved && req.PreferUnpaved {
+		return fmt.Errorf("%w: preferPaved and preferUnpaved cannot both be enabled", ErrInvalidRequest)
+	}
+	if req.PreferUnpaved && req.MinPavedPercent > 0 {
+		return fmt.Errorf("%w: minPavedPercent must be 0 when preferUnpaved is enabled", ErrInvalidRequest)
 	}
 	if req.SurfacePolicy != "" && req.SurfacePolicy != "strict" && req.SurfacePolicy != "assume_paved" {
 		return fmt.Errorf("%w: surfacePolicy must be strict or assume_paved", ErrInvalidRequest)
@@ -321,8 +335,9 @@ func buildMockRoute(req GenerateRouteRequest, targetM float64, seed int64) Candi
 			Type:        "LineString",
 			Coordinates: coordinates,
 		},
-		PavedPercent: mockPavedPercent(req),
-		Provider:     "mock",
+		PavedPercent:   mockPavedPercent(req),
+		UnpavedPercent: mockUnpavedPercent(req),
+		Provider:       "mock",
 		Warnings: []string{
 			"Mock geometry is for local UI testing only; set ORS_API_KEY for real paved-road routing.",
 		},
@@ -330,10 +345,19 @@ func buildMockRoute(req GenerateRouteRequest, targetM float64, seed int64) Candi
 }
 
 func mockPavedPercent(req GenerateRouteRequest) *float64 {
+	if req.PreferUnpaved {
+		value := 35.0
+		return &value
+	}
 	value := math.Max(req.MinPavedPercent, 80)
 	if value > 100 {
 		value = 100
 	}
+	return &value
+}
+
+func mockUnpavedPercent(req GenerateRouteRequest) *float64 {
+	value := 100 - *mockPavedPercent(req)
 	return &value
 }
 

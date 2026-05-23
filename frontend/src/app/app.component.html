@@ -157,8 +157,25 @@
       </label>
 
       <label class="check-row">
-        <p-checkbox [(ngModel)]="preferPaved" name="preferPaved" [binary]="true" inputId="preferPaved" />
+        <p-checkbox
+          [ngModel]="preferPaved"
+          (ngModelChange)="setPreferPaved($event)"
+          name="preferPaved"
+          [binary]="true"
+          inputId="preferPaved"
+        />
         <span>Prefer paved roads</span>
+      </label>
+
+      <label class="check-row">
+        <p-checkbox
+          [ngModel]="preferUnpaved"
+          (ngModelChange)="setPreferUnpaved($event)"
+          name="preferUnpaved"
+          [binary]="true"
+          inputId="preferUnpaved"
+        />
+        <span>Prefer unpaved routes</span>
       </label>
 
       <label class="check-row">

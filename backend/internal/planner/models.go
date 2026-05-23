@@ -27,6 +27,7 @@ type GenerateRouteRequest struct {
 	MaxStartDistanceKm    float64    `json:"maxStartDistanceKm"`
 	EstimatedPaceMinPerKm *float64   `json:"estimatedPaceMinPerKm,omitempty"`
 	PreferPaved           bool       `json:"preferPaved"`
+	PreferUnpaved         bool       `json:"preferUnpaved"`
 	MinPavedPercent       float64    `json:"minPavedPercent"`
 	SurfacePolicy         string     `json:"surfacePolicy,omitempty"`
 	PreferUnrunRoads      bool       `json:"preferUnrunRoads"`
@@ -65,6 +66,7 @@ type CandidateRequest struct {
 	Home             Coordinate
 	TargetDistanceM  float64
 	PreferPaved      bool
+	PreferUnpaved    bool
 	MinPavedPercent  float64
 	SurfacePolicy    string
 	PreferUnrunRoads bool

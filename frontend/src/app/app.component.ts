@@ -50,6 +50,7 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
   targetDistanceKm = 8;
   estimatedPaceMinPerKm = 6;
   preferPaved = true;
+  preferUnpaved = false;
   preferUnrunRoads = true;
 
   route?: RouteResponse;
@@ -153,6 +154,20 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
         this.errorMessage = this.errorText(err);
       },
     });
+  }
+
+  setPreferPaved(value: boolean): void {
+    this.preferPaved = value;
+    if (value) {
+      this.preferUnpaved = false;
+    }
+  }
+
+  setPreferUnpaved(value: boolean): void {
+    this.preferUnpaved = value;
+    if (value) {
+      this.preferPaved = false;
+    }
   }
 
   clearHistory(): void {
@@ -358,6 +373,7 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
         maxStartDistanceKm: 0,
         estimatedPaceMinPerKm: this.estimatedPaceMinPerKm,
         preferPaved: this.preferPaved,
+        preferUnpaved: this.preferUnpaved,
         minPavedPercent,
         surfacePolicy: 'assume_paved',
         preferUnrunRoads: this.preferUnrunRoads,

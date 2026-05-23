@@ -714,17 +714,17 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest, history historyOverla
 		var candidate localCandidate
 		var err error
 		if useShortLoopGenerator(req.TargetDistanceM) && len(shortCycleAnchors.Nodes) > 0 && i%3 == 0 {
-			candidate, err = g.cycleCandidate(start, req.TargetDistanceM, req.MinPavedPercent, pavedOnly, policy, rng, shortCycleAnchors, history, avoided, search)
+			candidate, err = g.cycleCandidate(start, req.TargetDistanceM, req.MinPavedPercent, req.PreferUnpaved, pavedOnly, policy, rng, shortCycleAnchors, history, avoided, search)
 		} else if useShortLoopGenerator(req.TargetDistanceM) && len(shortCycleAnchors.Nodes) > 0 && i%3 == 1 {
-			candidate, err = g.blockLoopCandidate(start, req.TargetDistanceM, req.MinPavedPercent, pavedOnly, policy, rng, shortCycleAnchors, history, avoided, search)
+			candidate, err = g.blockLoopCandidate(start, req.TargetDistanceM, req.MinPavedPercent, req.PreferUnpaved, pavedOnly, policy, rng, shortCycleAnchors, history, avoided, search)
 		} else if useMediumLoopGenerator(req.TargetDistanceM) && len(mediumCycleAnchors.Nodes) > 0 && i%3 == 0 {
-			candidate, err = g.cycleCandidate(start, req.TargetDistanceM, req.MinPavedPercent, pavedOnly, policy, rng, mediumCycleAnchors, history, avoided, search)
+			candidate, err = g.cycleCandidate(start, req.TargetDistanceM, req.MinPavedPercent, req.PreferUnpaved, pavedOnly, policy, rng, mediumCycleAnchors, history, avoided, search)
 		} else if useMediumLoopGenerator(req.TargetDistanceM) && len(mediumCycleAnchors.Nodes) > 0 && i%3 == 1 {
-			candidate, err = g.blockLoopCandidate(start, req.TargetDistanceM, req.MinPavedPercent, pavedOnly, policy, rng, mediumCycleAnchors, history, avoided, search)
+			candidate, err = g.blockLoopCandidate(start, req.TargetDistanceM, req.MinPavedPercent, req.PreferUnpaved, pavedOnly, policy, rng, mediumCycleAnchors, history, avoided, search)
 		} else if useCycleGenerator(req.TargetDistanceM) && len(cycleAnchors.Nodes) > 0 {
-			candidate, err = g.cycleCandidate(start, req.TargetDistanceM, req.MinPavedPercent, pavedOnly, policy, rng, cycleAnchors, history, avoided, search)
+			candidate, err = g.cycleCandidate(start, req.TargetDistanceM, req.MinPavedPercent, req.PreferUnpaved, pavedOnly, policy, rng, cycleAnchors, history, avoided, search)
 		} else {
-			candidate, err = g.loopCandidate(start, req.TargetDistanceM, req.MinPavedPercent, pavedOnly, policy, rng, waypoints, history, avoided, search)
+			candidate, err = g.loopCandidate(start, req.TargetDistanceM, req.MinPavedPercent, req.PreferUnpaved, pavedOnly, policy, rng, waypoints, history, avoided, search)
 		}
 		if err != nil {
 			stats.CandidateFailures++
@@ -735,12 +735,12 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest, history historyOverla
 			continue
 		}
 		successes++
-		score := localScore(candidate, req.TargetDistanceM, req.MinPavedPercent, req.PreferUnrunRoads)
+		score := localScore(candidate, req.TargetDistanceM, req.MinPavedPercent, req.PreferUnrunRoads, req.PreferUnpaved)
 		if score < bestScore {
 			best = candidate
 			bestScore = score
 		}
-		if candidate.DistanceM >= req.TargetDistanceM && candidate.DistanceM <= req.TargetDistanceM+500 && (req.MinPavedPercent <= 0 || math.Abs(candidate.PavedPercent-req.MinPavedPercent) <= 5) {
+		if !req.PreferUnpaved && candidate.DistanceM >= req.TargetDistanceM && candidate.DistanceM <= req.TargetDistanceM+500 && (req.MinPavedPercent <= 0 || math.Abs(candidate.PavedPercent-req.MinPavedPercent) <= 5) {
 			break
 		}
 	}
@@ -1023,7 +1023,7 @@ func (set waypointSet) pick(desiredBearing float64, desiredDistanceM float64, us
 	return set.Nodes[bestIdx].Index, nil
 }
 
-func (g *Graph) loopCandidate(start int, targetM float64, minPavedPercent float64, pavedOnly bool, surfacePolicy string, rng *rand.Rand, waypointSet waypointSet, history historyOverlay, avoided avoidanceOverlay, search *searchWorkspace) (localCandidate, error) {
+func (g *Graph) loopCandidate(start int, targetM float64, minPavedPercent float64, preferUnpaved bool, pavedOnly bool, surfacePolicy string, rng *rand.Rand, waypointSet waypointSet, history historyOverlay, avoided avoidanceOverlay, search *searchWorkspace) (localCandidate, error) {
 	radiusM := loopRadiusForTarget(targetM)
 	baseBearing := rng.Float64() * 2 * math.Pi
 	waypointCount := waypointCountForTarget(targetM, rng)
@@ -1041,7 +1041,7 @@ func (g *Graph) loopCandidate(start int, targetM float64, minPavedPercent float6
 	}
 	points := append([]int{start}, waypoints...)
 	points = append(points, start)
-	bounds := g.newRouteSearchBounds(points, targetM, minPavedPercent, pavedOnly, surfacePolicy)
+	bounds := g.newRouteSearchBounds(points, targetM, minPavedPercent, preferUnpaved, pavedOnly, surfacePolicy)
 
 	fullPath := []int{}
 	var edges []GraphEdge
@@ -1049,7 +1049,7 @@ func (g *Graph) loopCandidate(start int, targetM float64, minPavedPercent float6
 	sharedConnectorEdges := make(map[edgeKey]struct{})
 	for i := 1; i < len(points); i++ {
 		search.Bounds = bounds
-		path, pathEdges, err := g.shortestPath(points[i-1], points[i], minPavedPercent, pavedOnly, surfacePolicy, usedEdges, history.RecentEdges, avoided.RoadsByWayID, search)
+		path, pathEdges, err := g.shortestPath(points[i-1], points[i], minPavedPercent, preferUnpaved, pavedOnly, surfacePolicy, usedEdges, history.RecentEdges, avoided.RoadsByWayID, search)
 		if err != nil {
 			return localCandidate{}, err
 		}
@@ -1068,7 +1068,7 @@ func (g *Graph) loopCandidate(start int, targetM float64, minPavedPercent float6
 	return buildLocalCandidate(fullPath, edges, targetM, surfacePolicy, sharedConnectorEdges, history, avoided)
 }
 
-func (g *Graph) cycleCandidate(start int, targetM float64, minPavedPercent float64, pavedOnly bool, surfacePolicy string, rng *rand.Rand, anchors waypointSet, history historyOverlay, avoided avoidanceOverlay, search *searchWorkspace) (localCandidate, error) {
+func (g *Graph) cycleCandidate(start int, targetM float64, minPavedPercent float64, preferUnpaved bool, pavedOnly bool, surfacePolicy string, rng *rand.Rand, anchors waypointSet, history historyOverlay, avoided avoidanceOverlay, search *searchWorkspace) (localCandidate, error) {
 	startNode := g.Nodes[start]
 	desiredBearing := rng.Float64() * 2 * math.Pi
 	desiredRatio := 0.28 + rng.Float64()*0.24
@@ -1083,7 +1083,7 @@ func (g *Graph) cycleCandidate(start int, targetM float64, minPavedPercent float
 		return localCandidate{}, err
 	}
 
-	bounds := g.newRouteSearchBounds([]int{start, anchor}, targetM, minPavedPercent, pavedOnly, surfacePolicy)
+	bounds := g.newRouteSearchBounds([]int{start, anchor}, targetM, minPavedPercent, preferUnpaved, pavedOnly, surfacePolicy)
 	startBearing := bearingRadians(startNode.Lat, startNode.Lon, g.Nodes[anchor].Lat, g.Nodes[anchor].Lon)
 	expandM := targetM * 0.35
 	if useShortLoopGenerator(targetM) {
@@ -1094,7 +1094,7 @@ func (g *Graph) cycleCandidate(start int, targetM float64, minPavedPercent float
 	bounds = bounds.expandToward(startNode, startBearing, expandM)
 
 	search.Bounds = bounds
-	outPath, outEdges, err := g.shortestPath(start, anchor, minPavedPercent, pavedOnly, surfacePolicy, nil, history.RecentEdges, avoided.RoadsByWayID, search)
+	outPath, outEdges, err := g.shortestPath(start, anchor, minPavedPercent, preferUnpaved, pavedOnly, surfacePolicy, nil, history.RecentEdges, avoided.RoadsByWayID, search)
 	if err != nil {
 		return localCandidate{}, err
 	}
@@ -1105,7 +1105,7 @@ func (g *Graph) cycleCandidate(start int, targetM float64, minPavedPercent float
 	addBlockedPathEdgesExcept(blocked, outPath, sharedConnectorEdges)
 
 	search.Bounds = bounds
-	backPath, backEdges, err := g.shortestPath(anchor, start, minPavedPercent, pavedOnly, surfacePolicy, blocked, history.RecentEdges, avoided.RoadsByWayID, search)
+	backPath, backEdges, err := g.shortestPath(anchor, start, minPavedPercent, preferUnpaved, pavedOnly, surfacePolicy, blocked, history.RecentEdges, avoided.RoadsByWayID, search)
 	if err != nil {
 		return localCandidate{}, err
 	}
@@ -1121,7 +1121,7 @@ func (g *Graph) cycleCandidate(start int, targetM float64, minPavedPercent float
 	return buildLocalCandidate(fullPath, edges, targetM, surfacePolicy, sharedConnectorEdges, history, avoided)
 }
 
-func (g *Graph) blockLoopCandidate(start int, targetM float64, minPavedPercent float64, pavedOnly bool, surfacePolicy string, rng *rand.Rand, anchors waypointSet, history historyOverlay, avoided avoidanceOverlay, search *searchWorkspace) (localCandidate, error) {
+func (g *Graph) blockLoopCandidate(start int, targetM float64, minPavedPercent float64, preferUnpaved bool, pavedOnly bool, surfacePolicy string, rng *rand.Rand, anchors waypointSet, history historyOverlay, avoided avoidanceOverlay, search *searchWorkspace) (localCandidate, error) {
 	startNode := g.Nodes[start]
 	desiredBearing := rng.Float64() * 2 * math.Pi
 	desiredDistanceM := targetM * (0.15 + rng.Float64()*0.25)
@@ -1133,7 +1133,7 @@ func (g *Graph) blockLoopCandidate(start int, targetM float64, minPavedPercent f
 		return localCandidate{}, err
 	}
 
-	bounds := g.newRouteSearchBounds([]int{start, anchor}, targetM, minPavedPercent, pavedOnly, surfacePolicy)
+	bounds := g.newRouteSearchBounds([]int{start, anchor}, targetM, minPavedPercent, preferUnpaved, pavedOnly, surfacePolicy)
 	expandM := targetM * 0.12
 	if useMediumLoopGenerator(targetM) {
 		expandM = targetM * 0.22
@@ -1141,7 +1141,7 @@ func (g *Graph) blockLoopCandidate(start int, targetM float64, minPavedPercent f
 	bounds = bounds.expandToward(startNode, bearingRadians(startNode.Lat, startNode.Lon, g.Nodes[anchor].Lat, g.Nodes[anchor].Lon), expandM)
 
 	search.Bounds = bounds
-	outPath, outEdges, err := g.shortestPath(start, anchor, minPavedPercent, pavedOnly, surfacePolicy, nil, history.RecentEdges, avoided.RoadsByWayID, search)
+	outPath, outEdges, err := g.shortestPath(start, anchor, minPavedPercent, preferUnpaved, pavedOnly, surfacePolicy, nil, history.RecentEdges, avoided.RoadsByWayID, search)
 	if err != nil {
 		return localCandidate{}, err
 	}
@@ -1152,7 +1152,7 @@ func (g *Graph) blockLoopCandidate(start int, targetM float64, minPavedPercent f
 	addBlockedPathEdgesExcept(blocked, outPath, sharedConnectorEdges)
 
 	search.Bounds = bounds
-	backPath, backEdges, err := g.shortestPath(anchor, start, minPavedPercent, pavedOnly, surfacePolicy, blocked, history.RecentEdges, avoided.RoadsByWayID, search)
+	backPath, backEdges, err := g.shortestPath(anchor, start, minPavedPercent, preferUnpaved, pavedOnly, surfacePolicy, blocked, history.RecentEdges, avoided.RoadsByWayID, search)
 	if err != nil {
 		return localCandidate{}, err
 	}
@@ -1349,8 +1349,8 @@ func (g *Graph) importCoordinateRoute(coords []planner.Coordinate) (planner.Cand
 		}
 		directM := g.nodeDistanceM(from, to)
 		boundsTargetM := math.Max(1000, directM*4)
-		search.Bounds = g.newRouteSearchBounds([]int{from, to}, boundsTargetM, 0, false, SurfacePolicyAssumePaved)
-		path, pathEdges, err := g.shortestPath(from, to, 0, false, SurfacePolicyAssumePaved, nil, nil, nil, search)
+		search.Bounds = g.newRouteSearchBounds([]int{from, to}, boundsTargetM, 0, false, false, SurfacePolicyAssumePaved)
+		path, pathEdges, err := g.shortestPath(from, to, 0, false, false, SurfacePolicyAssumePaved, nil, nil, nil, search)
 		if err != nil {
 			return planner.CandidateRoute{}, fmt.Errorf("could not follow imported GPX on local OSM roads: %w", err)
 		}
@@ -1739,7 +1739,7 @@ func (b *routeSearchBounds) expandToward(origin GraphNode, bearing float64, dist
 	return b
 }
 
-func (g *Graph) newRouteSearchBounds(points []int, targetM float64, minPavedPercent float64, pavedOnly bool, surfacePolicy string) *routeSearchBounds {
+func (g *Graph) newRouteSearchBounds(points []int, targetM float64, minPavedPercent float64, preferUnpaved bool, pavedOnly bool, surfacePolicy string) *routeSearchBounds {
 	if len(points) == 0 {
 		return nil
 	}
@@ -1772,7 +1772,7 @@ func (g *Graph) newRouteSearchBounds(points []int, targetM float64, minPavedPerc
 	bounds.MaxLat += latMargin
 	bounds.MinLon -= lonMargin
 	bounds.MaxLon += lonMargin
-	bounds.MaxCostM = (targetM + 500) * maxAllowedSurfaceWeight(minPavedPercent, pavedOnly, surfacePolicy)
+	bounds.MaxCostM = (targetM + 500) * maxAllowedSurfaceWeight(minPavedPercent, preferUnpaved, pavedOnly, surfacePolicy)
 	return bounds
 }
 
@@ -1783,17 +1783,17 @@ func (b *routeSearchBounds) contains(node GraphNode) bool {
 	return node.Lat >= b.MinLat && node.Lat <= b.MaxLat && node.Lon >= b.MinLon && node.Lon <= b.MaxLon
 }
 
-func maxAllowedSurfaceWeight(minPavedPercent float64, pavedOnly bool, surfacePolicy string) float64 {
+func maxAllowedSurfaceWeight(minPavedPercent float64, preferUnpaved bool, pavedOnly bool, surfacePolicy string) float64 {
 	if !pavedOnly {
-		return surfaceWeight(SurfaceUnpaved, minPavedPercent)
+		return math.Max(surfaceWeight(SurfacePaved, minPavedPercent, preferUnpaved), math.Max(surfaceWeight(SurfaceUnpaved, minPavedPercent, preferUnpaved), surfaceWeight(SurfaceUnknown, minPavedPercent, preferUnpaved)))
 	}
 	if surfacePolicy == SurfacePolicyAssumePaved {
-		return surfaceWeight(SurfaceUnknown, minPavedPercent)
+		return surfaceWeight(SurfaceUnknown, minPavedPercent, preferUnpaved)
 	}
-	return surfaceWeight(SurfacePaved, minPavedPercent)
+	return surfaceWeight(SurfacePaved, minPavedPercent, preferUnpaved)
 }
 
-func (g *Graph) shortestPath(start int, goal int, minPavedPercent float64, pavedOnly bool, surfacePolicy string, blockedEdges map[edgeKey]struct{}, avoidEdges map[edgeKey]struct{}, avoidedWays map[int64]avoidance.Road, search *searchWorkspace) ([]int, []GraphEdge, error) {
+func (g *Graph) shortestPath(start int, goal int, minPavedPercent float64, preferUnpaved bool, pavedOnly bool, surfacePolicy string, blockedEdges map[edgeKey]struct{}, avoidEdges map[edgeKey]struct{}, avoidedWays map[int64]avoidance.Road, search *searchWorkspace) ([]int, []GraphEdge, error) {
 	if start == goal {
 		return []int{start}, nil, nil
 	}
@@ -1853,7 +1853,7 @@ func (g *Graph) shortestPath(start int, goal int, minPavedPercent float64, paved
 				}
 				continue
 			}
-			cost := edge.Distance * surfaceWeight(edge.Surface, minPavedPercent)
+			cost := edge.Distance * surfaceWeight(edge.Surface, minPavedPercent, preferUnpaved)
 			if _, avoid := avoidEdges[newEdgeKey(item.Node, edge.To)]; avoid {
 				cost *= recentRoadPenaltyWeight
 			}
@@ -1970,7 +1970,19 @@ func heuristicM(g *Graph, from int, to int) float64 {
 	return distanceM(a.Lat, a.Lon, b.Lat, b.Lon)
 }
 
-func surfaceWeight(surface int, minPavedPercent float64) float64 {
+func surfaceWeight(surface int, minPavedPercent float64, preferUnpaved bool) float64 {
+	if preferUnpaved {
+		switch surface {
+		case SurfaceUnpaved:
+			return 1
+		case SurfaceUnknown:
+			return 1.25
+		case SurfacePaved:
+			return 1.8
+		default:
+			return 1.25
+		}
+	}
 	if minPavedPercent <= 0 {
 		return 1
 	}
@@ -1996,7 +2008,7 @@ func usableSurface(surface int, pavedOnly bool, surfacePolicy string) bool {
 	return surface == SurfaceUnknown && surfacePolicy == SurfacePolicyAssumePaved
 }
 
-func localScore(candidate localCandidate, targetM float64, minPavedPercent float64, preferUnrunRoads bool) float64 {
+func localScore(candidate localCandidate, targetM float64, minPavedPercent float64, preferUnrunRoads bool, preferUnpaved bool) float64 {
 	shortPenalty := math.Max(0, targetM-candidate.DistanceM) / targetM * 1000
 	extraMeters := math.Max(0, candidate.DistanceM-targetM)
 	extraPenalty := extraMeters / targetM
@@ -2012,8 +2024,12 @@ func localScore(candidate localCandidate, targetM float64, minPavedPercent float
 	if preferUnrunRoads {
 		historyPenalty = candidate.PreviouslyRunPercent*8 + candidate.RecentPreviouslyRunPercent*45
 	}
+	unpavedPenalty := 0.0
+	if preferUnpaved {
+		unpavedPenalty = math.Max(0, 100-candidate.UnpavedPercent) * 5
+	}
 	avoidancePenalty := candidate.AvoidedRoadDistanceM * 20
-	return shortPenalty + extraPenalty + pavedPenalty + historyPenalty + avoidancePenalty
+	return shortPenalty + extraPenalty + pavedPenalty + historyPenalty + unpavedPenalty + avoidancePenalty
 }
 
 func edgeStats(edges []GraphEdge) (total float64, paved float64, unpaved float64, unknown float64) {

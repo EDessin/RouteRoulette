@@ -40,7 +40,7 @@ func TestRouteScorePrioritizesPavedThresholdOverExtraDistance(t *testing.T) {
 		PavedPercent: &unpaved,
 	}
 
-	if routeScore(longerPavedRoute, targetM, 90) >= routeScore(shorterUnpavedRoute, targetM, 90) {
+	if routeScore(longerPavedRoute, targetM, 90, false) >= routeScore(shorterUnpavedRoute, targetM, 90, false) {
 		t.Fatal("expected route scoring to prefer the longer route that satisfies the paved threshold")
 	}
 }
@@ -98,8 +98,27 @@ func TestRouteScorePrefersMorePavedRoadsAboveMinimum(t *testing.T) {
 		PavedPercent: &morePaved,
 	}
 
-	if routeScore(routeWithMorePavedRoads, targetM, 80) >= routeScore(routeThatMeetsMinimum, targetM, 80) {
+	if routeScore(routeWithMorePavedRoads, targetM, 80, false) >= routeScore(routeThatMeetsMinimum, targetM, 80, false) {
 		t.Fatal("expected route scoring to prefer more paved roads above the minimum")
+	}
+}
+
+func TestRouteScorePrefersMoreUnpavedRoadsWhenRequested(t *testing.T) {
+	targetM := 10000.0
+	lessUnpaved := 20.0
+	moreUnpaved := 70.0
+
+	pavedHeavyRoute := CandidateRoute{
+		DistanceM:      10000,
+		UnpavedPercent: &lessUnpaved,
+	}
+	unpavedHeavyRoute := CandidateRoute{
+		DistanceM:      10000,
+		UnpavedPercent: &moreUnpaved,
+	}
+
+	if routeScore(unpavedHeavyRoute, targetM, 0, true) >= routeScore(pavedHeavyRoute, targetM, 0, true) {
+		t.Fatal("expected route scoring to prefer more unpaved roads")
 	}
 }
 
@@ -117,11 +136,20 @@ func TestGoodEnoughAllowsRoutesAbovePavedMinimum(t *testing.T) {
 		PavedPercent: &belowMinimum,
 	}
 
-	if !isGoodEnough(aboveMinimumRoute, targetM, 80) {
+	if !isGoodEnough(aboveMinimumRoute, targetM, 80, false) {
 		t.Fatal("expected route above the paved minimum to be good enough")
 	}
-	if isGoodEnough(belowMinimumRoute, targetM, 80) {
+	if isGoodEnough(belowMinimumRoute, targetM, 80, false) {
 		t.Fatal("expected route more than five percentage points below the paved minimum not to be good enough")
+	}
+}
+
+func TestGoodEnoughKeepsSearchingWhenUnpavedIsPreferred(t *testing.T) {
+	targetM := 10000.0
+	route := CandidateRoute{DistanceM: 10000}
+
+	if isGoodEnough(route, targetM, 0, true) {
+		t.Fatal("expected unpaved preference to keep searching across candidates")
 	}
 }
 
@@ -138,7 +166,7 @@ func TestRouteScorePenalizesRoutesMoreThanHalfKilometerLong(t *testing.T) {
 		PavedPercent: &paved,
 	}
 
-	if routeScore(withinLimit, targetM, 70) >= routeScore(overLimit, targetM, 70) {
+	if routeScore(withinLimit, targetM, 70, false) >= routeScore(overLimit, targetM, 70, false) {
 		t.Fatal("expected route scoring to penalize routes more than 0.5 km longer than requested")
 	}
 }
@@ -156,7 +184,7 @@ func TestRouteScorePenalizesShortRoutes(t *testing.T) {
 		PavedPercent: &paved,
 	}
 
-	if routeScore(shortRoute, targetM, 90) <= routeScore(longRoute, targetM, 90) {
+	if routeScore(shortRoute, targetM, 90, false) <= routeScore(longRoute, targetM, 90, false) {
 		t.Fatal("expected route scoring to prefer a longer route over a route shorter than requested")
 	}
 }
@@ -176,5 +204,15 @@ func TestValidateAllowsAssumePavedSurfacePolicy(t *testing.T) {
 
 	if err := validate(req); err != nil {
 		t.Fatalf("validate() returned error: %v", err)
+	}
+}
+
+func TestValidateRejectsConflictingSurfacePreferences(t *testing.T) {
+	req := testGenerateRouteRequest()
+	req.MinPavedPercent = 80
+	req.PreferUnpaved = true
+
+	if err := validate(req); err == nil {
+		t.Fatal("expected conflicting paved and unpaved preferences to be rejected")
 	}
 }
