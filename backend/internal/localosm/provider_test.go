@@ -288,6 +288,27 @@ func TestLocalScorePrefersUnpavedRoadsWhenRequested(t *testing.T) {
 	}
 }
 
+func TestLocalScorePenalizesPavedOverageWhenUnpavedIsPreferred(t *testing.T) {
+	targetM := 2000.0
+
+	withinPavedCap := localCandidate{
+		DistanceM:           2000,
+		TaggedPavedPercent:  25,
+		KnownSurfacePercent: 50,
+		KnownUnpavedPercent: 50,
+	}
+	overPavedCap := localCandidate{
+		DistanceM:           2000,
+		TaggedPavedPercent:  30,
+		KnownSurfacePercent: 50,
+		KnownUnpavedPercent: 50,
+	}
+
+	if localScore(withinPavedCap, targetM, 0, false, true) >= localScore(overPavedCap, targetM, 0, false, true) {
+		t.Fatal("expected local scoring to penalize paved roads above the unpaved preference cap")
+	}
+}
+
 func TestPreferPavedDoesNotForcePavedOnlyFiltering(t *testing.T) {
 	req := planner.CandidateRequest{
 		PreferPaved:     true,

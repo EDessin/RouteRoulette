@@ -149,20 +149,33 @@ func TestGoodEnoughRequiresKnownUnpavedTargetWhenUnpavedIsPreferred(t *testing.T
 	belowTarget := 45.0
 	atTarget := 50.0
 	knownSurface := 50.0
+	withinPavedCap := 25.0
+	overPavedCap := 30.0
 
 	routeBelowTarget := CandidateRoute{
 		DistanceM:           10000,
+		PavedPercent:        &withinPavedCap,
 		KnownSurfacePercent: &knownSurface,
 		KnownUnpavedPercent: &belowTarget,
 	}
 	routeAtTarget := CandidateRoute{
 		DistanceM:           10000,
+		PavedPercent:        &withinPavedCap,
+		KnownSurfacePercent: &knownSurface,
+		KnownUnpavedPercent: &atTarget,
+	}
+	routeOverPavedCap := CandidateRoute{
+		DistanceM:           10000,
+		PavedPercent:        &overPavedCap,
 		KnownSurfacePercent: &knownSurface,
 		KnownUnpavedPercent: &atTarget,
 	}
 
 	if isGoodEnough(routeBelowTarget, targetM, 0, true) {
 		t.Fatal("expected unpaved preference to keep searching below the known-surface target")
+	}
+	if isGoodEnough(routeOverPavedCap, targetM, 0, true) {
+		t.Fatal("expected unpaved preference to keep searching above the paved-road cap")
 	}
 	if !isGoodEnough(routeAtTarget, targetM, 0, true) {
 		t.Fatal("expected unpaved preference to accept a route at the known-surface target")
