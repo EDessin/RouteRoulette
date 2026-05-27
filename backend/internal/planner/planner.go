@@ -12,7 +12,7 @@ import (
 
 const lowKnownSurfaceDataWarningThreshold = 20.0
 const preferredKnownPavedTarget = 95.0
-const preferredKnownUnpavedTarget = 75.0
+const preferredKnownUnpavedTarget = 50.0
 
 type RouteProvider interface {
 	GenerateRoundTrip(ctxReq *http.Request, req CandidateRequest) (CandidateRoute, error)

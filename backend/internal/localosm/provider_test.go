@@ -280,7 +280,7 @@ func TestLocalScorePrefersUnpavedRoadsWhenRequested(t *testing.T) {
 	unpavedRoute := localCandidate{
 		DistanceM:           2000,
 		KnownSurfacePercent: 50,
-		KnownUnpavedPercent: 75,
+		KnownUnpavedPercent: 50,
 	}
 
 	if localScore(unpavedRoute, targetM, 0, false, true) >= localScore(pavedRoute, targetM, 0, false, true) {
