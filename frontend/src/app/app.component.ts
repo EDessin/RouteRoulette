@@ -364,7 +364,7 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
   }
 
   private generateRouteFromResolvedHome(): void {
-    const minPavedPercent = this.preferPaved ? 80 : 0;
+    const minPavedPercent = this.preferPaved ? 95 : 0;
 
     this.routeApi
       .generateRoute({

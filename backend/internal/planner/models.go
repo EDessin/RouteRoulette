@@ -48,6 +48,9 @@ type RouteResponse struct {
 	PavedPercent          *float64       `json:"pavedPercent,omitempty"`
 	UnpavedPercent        *float64       `json:"unpavedPercent,omitempty"`
 	UnknownSurfacePercent *float64       `json:"unknownSurfacePercent,omitempty"`
+	KnownSurfacePercent   *float64       `json:"knownSurfacePercent,omitempty"`
+	KnownPavedPercent     *float64       `json:"knownPavedPercent,omitempty"`
+	KnownUnpavedPercent   *float64       `json:"knownUnpavedPercent,omitempty"`
 	UnrunPercent          *float64       `json:"unrunPercent,omitempty"`
 	PreviouslyRunPercent  *float64       `json:"previouslyRunPercent,omitempty"`
 	AvoidedRoadDistanceM  *float64       `json:"avoidedRoadDistanceM,omitempty"`
@@ -81,6 +84,9 @@ type CandidateRoute struct {
 	PavedPercent         *float64
 	UnpavedPercent       *float64
 	UnknownPercent       *float64
+	KnownSurfacePercent  *float64
+	KnownPavedPercent    *float64
+	KnownUnpavedPercent  *float64
 	UnrunPercent         *float64
 	PreviouslyRunPercent *float64
 	AvoidedRoadDistanceM *float64

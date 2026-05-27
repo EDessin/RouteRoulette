@@ -33,12 +33,15 @@ const (
 	SurfacePolicyStrict      = "strict"
 	SurfacePolicyAssumePaved = "assume_paved"
 
-	routeGenerationBudget    = 10 * time.Second
-	recentRoadPenaltyWeight  = 3
-	avoidedRoadPenaltyWeight = 50
-	maxAllowedAvoidedRoadM   = 50
-	sharedHomeConnectorM     = 200
-	graphCacheVersion        = 2
+	defaultRouteGenerationBudget = 10 * time.Second
+	surfaceRouteGenerationBudget = 25 * time.Second
+	preferredKnownSurfaceTarget  = 95.0
+	lowKnownSurfaceDataThreshold = 20.0
+	recentRoadPenaltyWeight      = 3
+	avoidedRoadPenaltyWeight     = 50
+	maxAllowedAvoidedRoadM       = 50
+	sharedHomeConnectorM         = 200
+	graphCacheVersion            = 2
 )
 
 var errRouteSearchTimedOut = errors.New("route search timed out")
@@ -679,7 +682,7 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest, history historyOverla
 	rng := rand.New(rand.NewSource(req.Seed))
 	best := localCandidate{}
 	bestScore := math.MaxFloat64
-	attempts := routeCandidateAttempts(req.TargetDistanceM)
+	attempts := routeCandidateAttempts(req.TargetDistanceM, hasSurfacePreference(req))
 	pavedOnly := pavedOnly(req)
 	policy := surfacePolicy(req)
 	waypointStarted := time.Now()
@@ -703,7 +706,8 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest, history historyOverla
 	search := g.newSearchWorkspace()
 	stats := &routeSearchStats{}
 	search.Stats = stats
-	deadline := started.Add(routeGenerationBudget)
+	budget := routeGenerationBudget(req)
+	deadline := started.Add(budget)
 	search.Deadline = deadline
 	successes := 0
 	for i := 0; i < attempts; i++ {
@@ -740,7 +744,7 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest, history historyOverla
 			best = candidate
 			bestScore = score
 		}
-		if !req.PreferUnpaved && candidate.DistanceM >= req.TargetDistanceM && candidate.DistanceM <= req.TargetDistanceM+500 && (req.MinPavedPercent <= 0 || math.Abs(candidate.PavedPercent-req.MinPavedPercent) <= 5) {
+		if candidate.DistanceM >= req.TargetDistanceM && candidate.DistanceM <= req.TargetDistanceM+500 && surfacePreferenceSatisfied(candidate, req) {
 			break
 		}
 	}
@@ -765,7 +769,7 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest, history historyOverla
 		)
 		return planner.CandidateRoute{}, errors.New("could not find a local OSM loop")
 	}
-	log.Printf("local-osm loop stats: total=%s start_lookup=%s waypoint_build=%s waypoints=%d attempts=%d successes=%d failures=%d timed_out=%t search_calls=%d settled=%d touched=%d stale_skips=%d closed_skips=%d bound_skips=%d cost_skips=%d max_queue=%d best_distance_km=%.2f paved=%.1f previously_run=%.1f recent_previously_run=%.1f",
+	log.Printf("local-osm loop stats: total=%s start_lookup=%s waypoint_build=%s waypoints=%d attempts=%d successes=%d failures=%d timed_out=%t search_calls=%d settled=%d touched=%d stale_skips=%d closed_skips=%d bound_skips=%d cost_skips=%d max_queue=%d best_distance_km=%.2f paved=%.1f known_paved=%.1f known_unpaved=%.1f previously_run=%.1f recent_previously_run=%.1f",
 		time.Since(started).Round(time.Millisecond),
 		startLookupDuration.Round(time.Millisecond),
 		waypointDuration.Round(time.Millisecond),
@@ -784,6 +788,8 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest, history historyOverla
 		stats.MaxQueueLen,
 		best.DistanceM/1000,
 		best.PavedPercent,
+		best.KnownPavedPercent,
+		best.KnownUnpavedPercent,
 		best.PreviouslyRunPercent,
 		best.RecentPreviouslyRunPercent,
 	)
@@ -791,6 +797,9 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest, history historyOverla
 	paved := round(best.TaggedPavedPercent, 1)
 	unpaved := round(best.UnpavedPercent, 1)
 	unknown := round(best.UnknownPercent, 1)
+	knownSurface := round(best.KnownSurfacePercent, 1)
+	knownPaved := round(best.KnownPavedPercent, 1)
+	knownUnpaved := round(best.KnownUnpavedPercent, 1)
 	var unrun *float64
 	var previouslyRun *float64
 	if req.PreferUnrunRoads {
@@ -804,11 +813,11 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest, history historyOverla
 	if best.AvoidedRoadDistanceM > 0 {
 		warnings = append(warnings, fmt.Sprintf("This route uses %.0f meters of an avoided road to cross or connect briefly.", best.AvoidedRoadDistanceM))
 	}
-	if policy == SurfacePolicyAssumePaved && unknown > 0 {
+	if policy == SurfacePolicyAssumePaved && unknown > 0 && !hasSurfacePreference(req) {
 		warnings = append(warnings, fmt.Sprintf("%.0f%% of this route uses roads without OSM surface tags and treats them as paved because of the selected surface-data mode.", unknown))
 	}
 	if stats.TimedOut {
-		warnings = append(warnings, fmt.Sprintf("Route generation stopped after %.0f seconds and returned the best route found so far.", routeGenerationBudget.Seconds()))
+		warnings = append(warnings, fmt.Sprintf("Route generation stopped after %.0f seconds and returned the best route found so far.", budget.Seconds()))
 	}
 	coords := make([][]float64, 0, len(best.Path))
 	for _, idx := range best.Path {
@@ -826,6 +835,9 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest, history historyOverla
 		PavedPercent:         &paved,
 		UnpavedPercent:       &unpaved,
 		UnknownPercent:       &unknown,
+		KnownSurfacePercent:  &knownSurface,
+		KnownPavedPercent:    &knownPaved,
+		KnownUnpavedPercent:  &knownUnpaved,
 		UnrunPercent:         unrun,
 		PreviouslyRunPercent: previouslyRun,
 		AvoidedRoadDistanceM: &avoidedDistance,
@@ -843,6 +855,9 @@ type localCandidate struct {
 	TaggedPavedPercent         float64
 	UnpavedPercent             float64
 	UnknownPercent             float64
+	KnownSurfacePercent        float64
+	KnownPavedPercent          float64
+	KnownUnpavedPercent        float64
 	UnrunPercent               float64
 	PreviouslyRunPercent       float64
 	RecentPreviouslyRunPercent float64
@@ -850,7 +865,18 @@ type localCandidate struct {
 }
 
 func pavedOnly(req planner.CandidateRequest) bool {
-	return req.PreferPaved && req.MinPavedPercent >= 100
+	return false
+}
+
+func hasSurfacePreference(req planner.CandidateRequest) bool {
+	return req.PreferPaved || req.PreferUnpaved
+}
+
+func routeGenerationBudget(req planner.CandidateRequest) time.Duration {
+	if hasSurfacePreference(req) {
+		return surfaceRouteGenerationBudget
+	}
+	return defaultRouteGenerationBudget
 }
 
 func surfacePolicy(req planner.CandidateRequest) string {
@@ -1190,6 +1216,13 @@ func buildLocalCandidate(path []int, edges []GraphEdge, targetM float64, surface
 	if surfacePolicy == SurfacePolicyAssumePaved {
 		effectivePaved += unknown
 	}
+	knownSurface := taggedPaved + unpaved
+	knownPavedPercent := 0.0
+	knownUnpavedPercent := 0.0
+	if knownSurface > 0 {
+		knownPavedPercent = taggedPaved / knownSurface * 100
+		knownUnpavedPercent = unpaved / knownSurface * 100
+	}
 	previouslyRun := historyDistance(path, edges, history.AllEdges)
 	recentlyRun := historyDistance(path, edges, history.RecentEdges)
 	return localCandidate{
@@ -1200,6 +1233,9 @@ func buildLocalCandidate(path []int, edges []GraphEdge, targetM float64, surface
 		TaggedPavedPercent:         taggedPaved / total * 100,
 		UnpavedPercent:             unpaved / total * 100,
 		UnknownPercent:             unknown / total * 100,
+		KnownSurfacePercent:        knownSurface / total * 100,
+		KnownPavedPercent:          knownPavedPercent,
+		KnownUnpavedPercent:        knownUnpavedPercent,
 		UnrunPercent:               math.Max(0, total-previouslyRun) / total * 100,
 		PreviouslyRunPercent:       previouslyRun / total * 100,
 		RecentPreviouslyRunPercent: recentlyRun / total * 100,
@@ -1243,14 +1279,31 @@ func waypointCountForTarget(targetM float64, rng *rand.Rand) int {
 	return minCount + rng.Intn(maxCount-minCount+1)
 }
 
-func routeCandidateAttempts(targetM float64) int {
+func routeCandidateAttempts(targetM float64, surfacePreference bool) int {
+	multiplier := 1
+	if surfacePreference {
+		multiplier = 2
+	}
 	if useCycleGenerator(targetM) {
-		return 600
+		return 600 * multiplier
 	}
 	if useMediumLoopGenerator(targetM) {
-		return 250
+		return 250 * multiplier
 	}
-	return 100
+	return 100 * multiplier
+}
+
+func surfacePreferenceSatisfied(candidate localCandidate, req planner.CandidateRequest) bool {
+	if req.PreferPaved {
+		return candidate.KnownSurfacePercent >= lowKnownSurfaceDataThreshold && candidate.KnownPavedPercent >= preferredKnownSurfaceTarget
+	}
+	if req.PreferUnpaved {
+		return candidate.KnownSurfacePercent >= lowKnownSurfaceDataThreshold && candidate.KnownUnpavedPercent >= preferredKnownSurfaceTarget
+	}
+	if req.MinPavedPercent > 0 {
+		return candidate.PavedPercent >= req.MinPavedPercent-5
+	}
+	return true
 }
 
 func historyDistance(path []int, edges []GraphEdge, historyEdges map[edgeKey]struct{}) float64 {
@@ -1338,7 +1391,7 @@ func (g *Graph) importCoordinateRoute(coords []planner.Coordinate) (planner.Cand
 	}
 
 	search := g.newSearchWorkspace()
-	search.Deadline = time.Now().Add(routeGenerationBudget)
+	search.Deadline = time.Now().Add(defaultRouteGenerationBudget)
 	fullPath := []int{}
 	edges := []GraphEdge{}
 	for i := 1; i < len(points); i++ {
@@ -1381,6 +1434,14 @@ func buildImportedRoute(g *Graph, path []int, edges []GraphEdge) (planner.Candid
 	paved := round(taggedPaved/total*100, 1)
 	unpavedPercent := round(unpaved/total*100, 1)
 	unknownPercent := round(unknown/total*100, 1)
+	knownSurface := taggedPaved + unpaved
+	knownSurfacePercent := round(knownSurface/total*100, 1)
+	knownPavedPercent := 0.0
+	knownUnpavedPercent := 0.0
+	if knownSurface > 0 {
+		knownPavedPercent = round(taggedPaved/knownSurface*100, 1)
+		knownUnpavedPercent = round(unpaved/knownSurface*100, 1)
+	}
 	avoidedDistance := 0.0
 	return planner.CandidateRoute{
 		Start:           planner.Coordinate{Lat: startNode.Lat, Lon: startNode.Lon},
@@ -1393,6 +1454,9 @@ func buildImportedRoute(g *Graph, path []int, edges []GraphEdge) (planner.Candid
 		PavedPercent:         &paved,
 		UnpavedPercent:       &unpavedPercent,
 		UnknownPercent:       &unknownPercent,
+		KnownSurfacePercent:  &knownSurfacePercent,
+		KnownPavedPercent:    &knownPavedPercent,
+		KnownUnpavedPercent:  &knownUnpavedPercent,
 		AvoidedRoadDistanceM: &avoidedDistance,
 		Segments:             routeSegments(path, edges),
 		Provider:             "local-osm-import",
@@ -1976,26 +2040,29 @@ func surfaceWeight(surface int, minPavedPercent float64, preferUnpaved bool) flo
 		case SurfaceUnpaved:
 			return 1
 		case SurfaceUnknown:
-			return 1.25
+			return 1.05
 		case SurfacePaved:
-			return 1.8
+			return 12
 		default:
-			return 1.25
+			return 1.05
+		}
+	}
+	if minPavedPercent > 0 {
+		switch surface {
+		case SurfacePaved:
+			return 1
+		case SurfaceUnknown:
+			return 1.05
+		case SurfaceUnpaved:
+			return 12
+		default:
+			return 1.05
 		}
 	}
 	if minPavedPercent <= 0 {
 		return 1
 	}
-	switch surface {
-	case SurfacePaved:
-		return 1
-	case SurfaceUnknown:
-		return 1 + minPavedPercent/80
-	case SurfaceUnpaved:
-		return 1 + minPavedPercent/25
-	default:
-		return 1
-	}
+	return 1
 }
 
 func usableSurface(surface int, pavedOnly bool, surfacePolicy string) bool {
@@ -2017,8 +2084,7 @@ func localScore(candidate localCandidate, targetM float64, minPavedPercent float
 	}
 	pavedPenalty := 0.0
 	if minPavedPercent > 0 {
-		shortfall := math.Max(0, minPavedPercent-candidate.PavedPercent)
-		pavedPenalty = shortfall*40 + math.Max(0, 100-candidate.PavedPercent)*0.5
+		pavedPenalty = surfacePreferencePenalty(candidate.KnownSurfacePercent, candidate.KnownPavedPercent)
 	}
 	historyPenalty := 0.0
 	if preferUnrunRoads {
@@ -2026,10 +2092,19 @@ func localScore(candidate localCandidate, targetM float64, minPavedPercent float
 	}
 	unpavedPenalty := 0.0
 	if preferUnpaved {
-		unpavedPenalty = math.Max(0, 100-candidate.UnpavedPercent) * 5
+		unpavedPenalty = surfacePreferencePenalty(candidate.KnownSurfacePercent, candidate.KnownUnpavedPercent)
 	}
 	avoidancePenalty := candidate.AvoidedRoadDistanceM * 20
 	return shortPenalty + extraPenalty + pavedPenalty + historyPenalty + unpavedPenalty + avoidancePenalty
+}
+
+func surfacePreferencePenalty(knownSurfacePercent float64, preferredKnownSurfacePercent float64) float64 {
+	lowKnownSurfacePenalty := math.Max(0, lowKnownSurfaceDataThreshold-knownSurfacePercent)
+	if knownSurfacePercent < 0.1 {
+		return lowKnownSurfacePenalty
+	}
+	shortfall := math.Max(0, preferredKnownSurfaceTarget-preferredKnownSurfacePercent)
+	return shortfall*100 + lowKnownSurfacePenalty
 }
 
 func edgeStats(edges []GraphEdge) (total float64, paved float64, unpaved float64, unknown float64) {

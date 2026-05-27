@@ -273,12 +273,14 @@ func TestLocalScorePrefersUnpavedRoadsWhenRequested(t *testing.T) {
 	targetM := 2000.0
 
 	pavedRoute := localCandidate{
-		DistanceM:      2000,
-		UnpavedPercent: 0,
+		DistanceM:           2000,
+		KnownSurfacePercent: 50,
+		KnownUnpavedPercent: 0,
 	}
 	unpavedRoute := localCandidate{
-		DistanceM:      2000,
-		UnpavedPercent: 70,
+		DistanceM:           2000,
+		KnownSurfacePercent: 50,
+		KnownUnpavedPercent: 95,
 	}
 
 	if localScore(unpavedRoute, targetM, 0, false, true) >= localScore(pavedRoute, targetM, 0, false, true) {
@@ -286,7 +288,7 @@ func TestLocalScorePrefersUnpavedRoadsWhenRequested(t *testing.T) {
 	}
 }
 
-func TestPreferPavedDoesNotForcePavedOnlyBelowOneHundredPercent(t *testing.T) {
+func TestPreferPavedDoesNotForcePavedOnlyFiltering(t *testing.T) {
 	req := planner.CandidateRequest{
 		PreferPaved:     true,
 		MinPavedPercent: 80,
@@ -297,8 +299,8 @@ func TestPreferPavedDoesNotForcePavedOnlyBelowOneHundredPercent(t *testing.T) {
 	}
 
 	req.MinPavedPercent = 100
-	if !pavedOnly(req) {
-		t.Fatal("expected 100% paved preference to keep paved-only filtering")
+	if pavedOnly(req) {
+		t.Fatal("expected prefer paved roads at 100% to still allow unknown-surface roads")
 	}
 }
 
@@ -615,17 +617,20 @@ func TestMediumCycleAnchorSetUsesNearbyIntersections(t *testing.T) {
 }
 
 func TestRouteCandidateAttemptsIncreaseForLongRoutes(t *testing.T) {
-	if got := routeCandidateAttempts(4000); got != 100 {
+	if got := routeCandidateAttempts(4000, false); got != 100 {
 		t.Fatalf("routeCandidateAttempts(4000) = %d, want 100", got)
 	}
-	if got := routeCandidateAttempts(8000); got != 250 {
+	if got := routeCandidateAttempts(8000, false); got != 250 {
 		t.Fatalf("routeCandidateAttempts(8000) = %d, want 250", got)
 	}
-	if got := routeCandidateAttempts(12000); got != 250 {
+	if got := routeCandidateAttempts(12000, false); got != 250 {
 		t.Fatalf("routeCandidateAttempts(12000) = %d, want 250", got)
 	}
-	if got := routeCandidateAttempts(16000); got != 600 {
+	if got := routeCandidateAttempts(16000, false); got != 600 {
 		t.Fatalf("routeCandidateAttempts(16000) = %d, want 600", got)
+	}
+	if got := routeCandidateAttempts(8000, true); got != 500 {
+		t.Fatalf("routeCandidateAttempts(8000, surface preference) = %d, want 500", got)
 	}
 }
 

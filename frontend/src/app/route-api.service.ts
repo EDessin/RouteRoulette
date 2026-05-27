@@ -63,6 +63,9 @@ export interface RouteResponse {
   pavedPercent?: number;
   unpavedPercent?: number;
   unknownSurfacePercent?: number;
+  knownSurfacePercent?: number;
+  knownPavedPercent?: number;
+  knownUnpavedPercent?: number;
   unrunPercent?: number;
   previouslyRunPercent?: number;
   avoidedRoadDistanceM?: number;

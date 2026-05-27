@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const lowKnownSurfaceDataWarningThreshold = 20.0
+
 type RouteProvider interface {
 	GenerateRoundTrip(ctxReq *http.Request, req CandidateRequest) (CandidateRoute, error)
 }
@@ -145,24 +147,21 @@ func (p Planner) providerAttempts() int {
 }
 
 func routeScore(route CandidateRoute, targetM float64, minPavedPercent float64, preferUnpaved bool) float64 {
-	pavedShortfall := pavedShortfallRatio(route, minPavedPercent)
-	pavedGapToPerfect := pavedGapToPerfectRatio(route, minPavedPercent)
+	surfaceTarget := preferredKnownSurfaceTarget(minPavedPercent, preferUnpaved)
+	surfaceShortfall := preferredKnownSurfaceShortfallPercent(route, minPavedPercent, preferUnpaved)
+	surfaceGapToPerfect := preferredKnownSurfaceGapToPerfectPercent(route, minPavedPercent, preferUnpaved)
 	shortRoutePenalty := math.Max(0, targetM-route.DistanceM) / targetM
 	extraMeters := math.Max(0, route.DistanceM-targetM)
 	extraDistancePenalty := extraMeters / targetM
 	if extraMeters > 500 {
 		extraDistancePenalty += (extraMeters - 500) / 10
 	}
-	unpavedPreferencePenalty := 0.0
-	if preferUnpaved && route.UnpavedPercent != nil {
-		unpavedPreferencePenalty = math.Max(0, 100-*route.UnpavedPercent) / 100 * 5
+
+	if surfaceTarget > 0 {
+		return surfaceShortfall*2 + surfaceGapToPerfect*0.2 + shortRoutePenalty*50 + extraDistancePenalty
 	}
 
-	if minPavedPercent > 0 {
-		return pavedShortfall*120 + pavedGapToPerfect*5 + shortRoutePenalty*50 + extraDistancePenalty + unpavedPreferencePenalty
-	}
-
-	return shortRoutePenalty*50 + extraDistancePenalty + unpavedPreferencePenalty
+	return shortRoutePenalty*50 + extraDistancePenalty
 }
 
 func pavedShortfallRatio(route CandidateRoute, minPavedPercent float64) float64 {
@@ -186,9 +185,64 @@ func pavedShortfallPercent(route CandidateRoute, minPavedPercent float64) float6
 	return math.Max(0, minPavedPercent-*route.PavedPercent)
 }
 
-func isGoodEnough(route CandidateRoute, targetM float64, minPavedPercent float64, preferUnpaved bool) bool {
+func preferredKnownSurfaceTarget(minPavedPercent float64, preferUnpaved bool) float64 {
 	if preferUnpaved {
-		return false
+		return 95
+	}
+	if minPavedPercent > 0 {
+		return math.Max(95, minPavedPercent)
+	}
+	return 0
+}
+
+func hasSurfacePreference(req GenerateRouteRequest) bool {
+	return req.PreferPaved || req.PreferUnpaved
+}
+
+func preferredKnownSurfacePercent(route CandidateRoute, minPavedPercent float64, preferUnpaved bool) *float64 {
+	if preferUnpaved {
+		if route.KnownUnpavedPercent != nil {
+			return route.KnownUnpavedPercent
+		}
+		return route.UnpavedPercent
+	}
+	if minPavedPercent > 0 {
+		if route.KnownPavedPercent != nil {
+			return route.KnownPavedPercent
+		}
+		return route.PavedPercent
+	}
+	return nil
+}
+
+func preferredKnownSurfaceShortfallPercent(route CandidateRoute, minPavedPercent float64, preferUnpaved bool) float64 {
+	target := preferredKnownSurfaceTarget(minPavedPercent, preferUnpaved)
+	percent := preferredKnownSurfacePercent(route, minPavedPercent, preferUnpaved)
+	if target <= 0 || percent == nil {
+		return 0
+	}
+	if route.KnownSurfacePercent != nil && *route.KnownSurfacePercent < lowKnownSurfaceDataWarningThreshold {
+		return 0
+	}
+	return math.Max(0, target-*percent)
+}
+
+func preferredKnownSurfaceGapToPerfectPercent(route CandidateRoute, minPavedPercent float64, preferUnpaved bool) float64 {
+	target := preferredKnownSurfaceTarget(minPavedPercent, preferUnpaved)
+	percent := preferredKnownSurfacePercent(route, minPavedPercent, preferUnpaved)
+	if target <= 0 || percent == nil {
+		return 0
+	}
+	if route.KnownSurfacePercent != nil && *route.KnownSurfacePercent < lowKnownSurfaceDataWarningThreshold {
+		return 0
+	}
+	return math.Max(0, 100-*percent)
+}
+
+func isGoodEnough(route CandidateRoute, targetM float64, minPavedPercent float64, preferUnpaved bool) bool {
+	target := preferredKnownSurfaceTarget(minPavedPercent, preferUnpaved)
+	if target > 0 {
+		return route.DistanceM >= targetM && preferredKnownSurfaceShortfallPercent(route, minPavedPercent, preferUnpaved) <= 0
 	}
 	return route.DistanceM >= targetM && pavedShortfallPercent(route, minPavedPercent) <= 5
 }
@@ -203,11 +257,22 @@ func routeResponse(route CandidateRoute, req GenerateRouteRequest, warnings []st
 	} else if actualKm > req.TargetDistanceKm+0.5 {
 		allWarnings = append(allWarnings, "The generated route is more than 0.5 km longer than requested.")
 	}
-	if req.MinPavedPercent > 0 && route.PavedPercent == nil {
+	if req.MinPavedPercent > 0 && preferredKnownSurfacePercent(route, req.MinPavedPercent, false) == nil {
 		allWarnings = append(allWarnings, "Surface data was not available, so the paved-road preference could not be verified.")
 	}
-	if req.MinPavedPercent > 0 && route.PavedPercent != nil && *route.PavedPercent < req.MinPavedPercent {
-		allWarnings = append(allWarnings, fmt.Sprintf("The best route found is %.0f%% paved, below your %.0f%% minimum.", *route.PavedPercent, req.MinPavedPercent))
+	limitedKnownSurface := route.KnownSurfacePercent != nil && *route.KnownSurfacePercent < lowKnownSurfaceDataWarningThreshold
+	if hasSurfacePreference(req) && limitedKnownSurface {
+		allWarnings = append(allWarnings, fmt.Sprintf("Only %.0f%% of this route has known surface data, so the surface preference is based on limited OSM and manual road markings.", *route.KnownSurfacePercent))
+	}
+	if req.PreferPaved {
+		if percent := preferredKnownSurfacePercent(route, req.MinPavedPercent, false); !limitedKnownSurface && percent != nil && *percent < preferredKnownSurfaceTarget(req.MinPavedPercent, false) {
+			allWarnings = append(allWarnings, fmt.Sprintf("The best route found is %.0f%% paved across roads with known surface data, below your %.0f%% target.", *percent, preferredKnownSurfaceTarget(req.MinPavedPercent, false)))
+		}
+	}
+	if req.PreferUnpaved {
+		if percent := preferredKnownSurfacePercent(route, req.MinPavedPercent, true); !limitedKnownSurface && percent != nil && *percent < preferredKnownSurfaceTarget(req.MinPavedPercent, true) {
+			allWarnings = append(allWarnings, fmt.Sprintf("The best route found is %.0f%% unpaved across roads with known surface data, below your %.0f%% target.", *percent, preferredKnownSurfaceTarget(req.MinPavedPercent, true)))
+		}
 	}
 
 	durationMinutes := route.DurationSeconds / 60
@@ -224,6 +289,9 @@ func routeResponse(route CandidateRoute, req GenerateRouteRequest, warnings []st
 		PavedPercent:          route.PavedPercent,
 		UnpavedPercent:        route.UnpavedPercent,
 		UnknownSurfacePercent: route.UnknownPercent,
+		KnownSurfacePercent:   route.KnownSurfacePercent,
+		KnownPavedPercent:     route.KnownPavedPercent,
+		KnownUnpavedPercent:   route.KnownUnpavedPercent,
 		UnrunPercent:          route.UnrunPercent,
 		PreviouslyRunPercent:  route.PreviouslyRunPercent,
 		AvoidedRoadDistanceM:  route.AvoidedRoadDistanceM,
@@ -335,9 +403,12 @@ func buildMockRoute(req GenerateRouteRequest, targetM float64, seed int64) Candi
 			Type:        "LineString",
 			Coordinates: coordinates,
 		},
-		PavedPercent:   mockPavedPercent(req),
-		UnpavedPercent: mockUnpavedPercent(req),
-		Provider:       "mock",
+		PavedPercent:        mockPavedPercent(req),
+		UnpavedPercent:      mockUnpavedPercent(req),
+		KnownSurfacePercent: mockKnownSurfacePercent(),
+		KnownPavedPercent:   mockPavedPercent(req),
+		KnownUnpavedPercent: mockUnpavedPercent(req),
+		Provider:            "mock",
 		Warnings: []string{
 			"Mock geometry is for local UI testing only; set ORS_API_KEY for real paved-road routing.",
 		},
@@ -358,6 +429,11 @@ func mockPavedPercent(req GenerateRouteRequest) *float64 {
 
 func mockUnpavedPercent(req GenerateRouteRequest) *float64 {
 	value := 100 - *mockPavedPercent(req)
+	return &value
+}
+
+func mockKnownSurfacePercent() *float64 {
+	value := 100.0
 	return &value
 }
 
