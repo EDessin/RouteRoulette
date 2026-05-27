@@ -146,8 +146,8 @@ func TestGoodEnoughAllowsRoutesAbovePavedMinimum(t *testing.T) {
 
 func TestGoodEnoughRequiresKnownUnpavedTargetWhenUnpavedIsPreferred(t *testing.T) {
 	targetM := 10000.0
-	belowTarget := 90.0
-	atTarget := 95.0
+	belowTarget := 70.0
+	atTarget := 75.0
 	knownSurface := 50.0
 
 	routeBelowTarget := CandidateRoute{

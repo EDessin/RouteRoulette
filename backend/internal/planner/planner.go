@@ -11,6 +11,8 @@ import (
 )
 
 const lowKnownSurfaceDataWarningThreshold = 20.0
+const preferredKnownPavedTarget = 95.0
+const preferredKnownUnpavedTarget = 75.0
 
 type RouteProvider interface {
 	GenerateRoundTrip(ctxReq *http.Request, req CandidateRequest) (CandidateRoute, error)
@@ -187,10 +189,10 @@ func pavedShortfallPercent(route CandidateRoute, minPavedPercent float64) float6
 
 func preferredKnownSurfaceTarget(minPavedPercent float64, preferUnpaved bool) float64 {
 	if preferUnpaved {
-		return 95
+		return preferredKnownUnpavedTarget
 	}
 	if minPavedPercent > 0 {
-		return math.Max(95, minPavedPercent)
+		return math.Max(preferredKnownPavedTarget, minPavedPercent)
 	}
 	return 0
 }

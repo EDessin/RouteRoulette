@@ -35,7 +35,8 @@ const (
 
 	defaultRouteGenerationBudget = 10 * time.Second
 	surfaceRouteGenerationBudget = 25 * time.Second
-	preferredKnownSurfaceTarget  = 95.0
+	preferredKnownPavedTarget    = 95.0
+	preferredKnownUnpavedTarget  = 75.0
 	lowKnownSurfaceDataThreshold = 20.0
 	recentRoadPenaltyWeight      = 3
 	avoidedRoadPenaltyWeight     = 50
@@ -1295,10 +1296,10 @@ func routeCandidateAttempts(targetM float64, surfacePreference bool) int {
 
 func surfacePreferenceSatisfied(candidate localCandidate, req planner.CandidateRequest) bool {
 	if req.PreferPaved {
-		return candidate.KnownSurfacePercent >= lowKnownSurfaceDataThreshold && candidate.KnownPavedPercent >= preferredKnownSurfaceTarget
+		return candidate.KnownSurfacePercent >= lowKnownSurfaceDataThreshold && candidate.KnownPavedPercent >= preferredKnownPavedTarget
 	}
 	if req.PreferUnpaved {
-		return candidate.KnownSurfacePercent >= lowKnownSurfaceDataThreshold && candidate.KnownUnpavedPercent >= preferredKnownSurfaceTarget
+		return candidate.KnownSurfacePercent >= lowKnownSurfaceDataThreshold && candidate.KnownUnpavedPercent >= preferredKnownUnpavedTarget
 	}
 	if req.MinPavedPercent > 0 {
 		return candidate.PavedPercent >= req.MinPavedPercent-5
@@ -2084,7 +2085,7 @@ func localScore(candidate localCandidate, targetM float64, minPavedPercent float
 	}
 	pavedPenalty := 0.0
 	if minPavedPercent > 0 {
-		pavedPenalty = surfacePreferencePenalty(candidate.KnownSurfacePercent, candidate.KnownPavedPercent)
+		pavedPenalty = surfacePreferencePenalty(candidate.KnownSurfacePercent, candidate.KnownPavedPercent, preferredKnownPavedTarget)
 	}
 	historyPenalty := 0.0
 	if preferUnrunRoads {
@@ -2092,18 +2093,18 @@ func localScore(candidate localCandidate, targetM float64, minPavedPercent float
 	}
 	unpavedPenalty := 0.0
 	if preferUnpaved {
-		unpavedPenalty = surfacePreferencePenalty(candidate.KnownSurfacePercent, candidate.KnownUnpavedPercent)
+		unpavedPenalty = surfacePreferencePenalty(candidate.KnownSurfacePercent, candidate.KnownUnpavedPercent, preferredKnownUnpavedTarget)
 	}
 	avoidancePenalty := candidate.AvoidedRoadDistanceM * 20
 	return shortPenalty + extraPenalty + pavedPenalty + historyPenalty + unpavedPenalty + avoidancePenalty
 }
 
-func surfacePreferencePenalty(knownSurfacePercent float64, preferredKnownSurfacePercent float64) float64 {
+func surfacePreferencePenalty(knownSurfacePercent float64, preferredKnownSurfacePercent float64, target float64) float64 {
 	lowKnownSurfacePenalty := math.Max(0, lowKnownSurfaceDataThreshold-knownSurfacePercent)
 	if knownSurfacePercent < 0.1 {
 		return lowKnownSurfacePenalty
 	}
-	shortfall := math.Max(0, preferredKnownSurfaceTarget-preferredKnownSurfacePercent)
+	shortfall := math.Max(0, target-preferredKnownSurfacePercent)
 	return shortfall*100 + lowKnownSurfacePenalty
 }
 
