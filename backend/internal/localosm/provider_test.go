@@ -293,13 +293,13 @@ func TestLocalScorePenalizesPavedOverageWhenUnpavedIsPreferred(t *testing.T) {
 
 	withinPavedCap := localCandidate{
 		DistanceM:           2000,
-		TaggedPavedPercent:  30,
+		TaggedPavedPercent:  35,
 		KnownSurfacePercent: 50,
 		KnownUnpavedPercent: 50,
 	}
 	overPavedCap := localCandidate{
 		DistanceM:           2000,
-		TaggedPavedPercent:  35,
+		TaggedPavedPercent:  40,
 		KnownSurfacePercent: 50,
 		KnownUnpavedPercent: 50,
 	}
@@ -313,12 +313,12 @@ func TestSurfacePreferenceAllowsUnpavedFallbackWithoutRelaxingPavedCap(t *testin
 	req := planner.CandidateRequest{PreferUnpaved: true}
 	candidate := localCandidate{
 		DistanceM:           2000,
-		TaggedPavedPercent:  30,
+		TaggedPavedPercent:  35,
 		KnownSurfacePercent: 50,
 		KnownUnpavedPercent: 40,
 	}
 	overPavedCap := candidate
-	overPavedCap.TaggedPavedPercent = 31
+	overPavedCap.TaggedPavedPercent = 36
 
 	if surfacePreferenceSatisfied(candidate, req, preferredKnownUnpavedTarget) {
 		t.Fatal("expected strict unpaved target not to accept the fallback candidate")
