@@ -149,8 +149,8 @@ func TestGoodEnoughRequiresKnownUnpavedTargetWhenUnpavedIsPreferred(t *testing.T
 	belowTarget := 45.0
 	atTarget := 50.0
 	knownSurface := 50.0
-	withinPavedCap := 25.0
-	overPavedCap := 30.0
+	withinPavedCap := 30.0
+	overPavedCap := 35.0
 
 	routeBelowTarget := CandidateRoute{
 		DistanceM:           10000,

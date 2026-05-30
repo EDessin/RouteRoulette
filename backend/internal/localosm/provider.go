@@ -37,7 +37,7 @@ const (
 	surfaceRouteGenerationBudget = 25 * time.Second
 	preferredKnownPavedTarget    = 95.0
 	preferredKnownUnpavedTarget  = 50.0
-	maxPavedWhenPreferUnpaved    = 25.0
+	maxPavedWhenPreferUnpaved    = 30.0
 	lowKnownSurfaceDataThreshold = 20.0
 	recentRoadPenaltyWeight      = 3
 	avoidedRoadPenaltyWeight     = 50
