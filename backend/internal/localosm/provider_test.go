@@ -309,6 +309,45 @@ func TestLocalScorePenalizesPavedOverageWhenUnpavedIsPreferred(t *testing.T) {
 	}
 }
 
+func TestSurfacePreferenceAllowsUnpavedFallbackWithoutRelaxingPavedCap(t *testing.T) {
+	req := planner.CandidateRequest{PreferUnpaved: true}
+	candidate := localCandidate{
+		DistanceM:           2000,
+		TaggedPavedPercent:  25,
+		KnownSurfacePercent: 50,
+		KnownUnpavedPercent: 40,
+	}
+	overPavedCap := candidate
+	overPavedCap.TaggedPavedPercent = 26
+
+	if surfacePreferenceSatisfied(candidate, req, preferredKnownUnpavedTarget) {
+		t.Fatal("expected strict unpaved target not to accept the fallback candidate")
+	}
+	if !surfacePreferenceSatisfied(candidate, req, 40) {
+		t.Fatal("expected fallback unpaved target to accept the candidate")
+	}
+	if surfacePreferenceSatisfied(overPavedCap, req, 40) {
+		t.Fatal("expected fallback unpaved target to keep the paved-road cap")
+	}
+}
+
+func TestUnpavedTargetForAttemptStepsDownOnlyForUnpavedPreference(t *testing.T) {
+	req := planner.CandidateRequest{PreferUnpaved: true}
+
+	if got := unpavedTargetForAttempt(req, 0, 100); got != preferredKnownUnpavedTarget {
+		t.Fatalf("first fallback target = %.0f, want %.0f", got, preferredKnownUnpavedTarget)
+	}
+	if got := unpavedTargetForAttempt(req, 50, 100); got != 30 {
+		t.Fatalf("mid-search fallback target = %.0f, want 30", got)
+	}
+	if got := unpavedTargetForAttempt(req, 99, 100); got != 20 {
+		t.Fatalf("last fallback target = %.0f, want 20", got)
+	}
+	if got := unpavedTargetForAttempt(planner.CandidateRequest{}, 99, 100); got != preferredKnownUnpavedTarget {
+		t.Fatalf("non-unpaved target = %.0f, want %.0f", got, preferredKnownUnpavedTarget)
+	}
+}
+
 func TestPreferPavedDoesNotForcePavedOnlyFiltering(t *testing.T) {
 	req := planner.CandidateRequest{
 		PreferPaved:     true,

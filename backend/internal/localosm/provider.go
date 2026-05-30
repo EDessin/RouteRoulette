@@ -48,6 +48,8 @@ const (
 
 var errRouteSearchTimedOut = errors.New("route search timed out")
 
+var preferUnpavedFallbackTargets = []float64{preferredKnownUnpavedTarget, 40, 30, 20}
+
 type Config struct {
 	DataDir        string
 	ExtractPath    string
@@ -712,9 +714,15 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest, history historyOverla
 	deadline := started.Add(budget)
 	search.Deadline = deadline
 	successes := 0
+	acceptedUnpavedTarget := preferredKnownUnpavedTarget
 	for i := 0; i < attempts; i++ {
 		if i > 0 && time.Now().After(deadline) {
 			stats.TimedOut = true
+			break
+		}
+		unpavedTarget := unpavedTargetForAttempt(req, i, attempts)
+		if len(best.Path) > 0 && best.DistanceM >= req.TargetDistanceM && best.DistanceM <= req.TargetDistanceM+500 && surfacePreferenceSatisfied(best, req, unpavedTarget) {
+			acceptedUnpavedTarget = unpavedTarget
 			break
 		}
 		var candidate localCandidate
@@ -746,7 +754,8 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest, history historyOverla
 			best = candidate
 			bestScore = score
 		}
-		if candidate.DistanceM >= req.TargetDistanceM && candidate.DistanceM <= req.TargetDistanceM+500 && surfacePreferenceSatisfied(candidate, req) {
+		if candidate.DistanceM >= req.TargetDistanceM && candidate.DistanceM <= req.TargetDistanceM+500 && surfacePreferenceSatisfied(candidate, req, unpavedTarget) {
+			acceptedUnpavedTarget = unpavedTarget
 			break
 		}
 	}
@@ -820,6 +829,9 @@ func (g *Graph) GenerateLoop(req planner.CandidateRequest, history historyOverla
 	}
 	if stats.TimedOut {
 		warnings = append(warnings, fmt.Sprintf("Route generation stopped after %.0f seconds and returned the best route found so far.", budget.Seconds()))
+	}
+	if req.PreferUnpaved && acceptedUnpavedTarget < preferredKnownUnpavedTarget && best.KnownUnpavedPercent < preferredKnownUnpavedTarget {
+		warnings = append(warnings, fmt.Sprintf("Could not find a route at the %.0f%% known-unpaved target, so RouteRoulette accepted a fallback target of %.0f%% while keeping the paved-road and distance limits unchanged.", preferredKnownUnpavedTarget, acceptedUnpavedTarget))
 	}
 	coords := make([][]float64, 0, len(best.Path))
 	for _, idx := range best.Path {
@@ -1295,19 +1307,34 @@ func routeCandidateAttempts(targetM float64, surfacePreference bool) int {
 	return 100 * multiplier
 }
 
-func surfacePreferenceSatisfied(candidate localCandidate, req planner.CandidateRequest) bool {
+func surfacePreferenceSatisfied(candidate localCandidate, req planner.CandidateRequest, unpavedTarget float64) bool {
 	if req.PreferPaved {
 		return candidate.KnownSurfacePercent >= lowKnownSurfaceDataThreshold && candidate.KnownPavedPercent >= preferredKnownPavedTarget
 	}
 	if req.PreferUnpaved {
 		return candidate.KnownSurfacePercent >= lowKnownSurfaceDataThreshold &&
-			candidate.KnownUnpavedPercent >= preferredKnownUnpavedTarget &&
+			candidate.KnownUnpavedPercent >= unpavedTarget &&
 			candidate.TaggedPavedPercent <= maxPavedWhenPreferUnpaved
 	}
 	if req.MinPavedPercent > 0 {
 		return candidate.PavedPercent >= req.MinPavedPercent-5
 	}
 	return true
+}
+
+func unpavedTargetForAttempt(req planner.CandidateRequest, attempt int, attempts int) float64 {
+	if !req.PreferUnpaved || attempts <= 0 {
+		return preferredKnownUnpavedTarget
+	}
+	targets := preferUnpavedFallbackTargets
+	if len(targets) == 0 {
+		return preferredKnownUnpavedTarget
+	}
+	index := attempt * len(targets) / attempts
+	if index >= len(targets) {
+		index = len(targets) - 1
+	}
+	return targets[index]
 }
 
 func historyDistance(path []int, edges []GraphEdge, historyEdges map[edgeKey]struct{}) float64 {
