@@ -7,6 +7,8 @@ export interface Coordinate {
   lon: number;
 }
 
+export type RouteDirection = '' | 'N' | 'NE' | 'E' | 'SE' | 'S' | 'SW' | 'W' | 'NW';
+
 export interface GenerateRouteRequest {
   home: Coordinate;
   targetDistanceKm: number;
@@ -17,6 +19,7 @@ export interface GenerateRouteRequest {
   minPavedPercent: number;
   surfacePolicy?: 'strict' | 'assume_paved';
   preferUnrunRoads: boolean;
+  preferredDirection?: RouteDirection;
   seed?: number;
 }
 

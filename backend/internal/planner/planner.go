@@ -102,15 +102,16 @@ func (p Planner) bestCandidate(r *http.Request, req GenerateRouteRequest, target
 		}
 
 		route, err := p.provider.GenerateRoundTrip(r, CandidateRequest{
-			Start:            start,
-			Home:             req.Home,
-			TargetDistanceM:  requestedDistanceM,
-			PreferPaved:      req.PreferPaved,
-			PreferUnpaved:    req.PreferUnpaved,
-			MinPavedPercent:  req.MinPavedPercent,
-			SurfacePolicy:    req.SurfacePolicy,
-			PreferUnrunRoads: req.PreferUnrunRoads,
-			Seed:             candidateSeed,
+			Start:              start,
+			Home:               req.Home,
+			TargetDistanceM:    requestedDistanceM,
+			PreferPaved:        req.PreferPaved,
+			PreferUnpaved:      req.PreferUnpaved,
+			MinPavedPercent:    req.MinPavedPercent,
+			SurfacePolicy:      req.SurfacePolicy,
+			PreferUnrunRoads:   req.PreferUnrunRoads,
+			PreferredDirection: req.PreferredDirection,
+			Seed:               candidateSeed,
 		})
 		if err != nil {
 			lastErr = err
@@ -342,7 +343,19 @@ func validate(req GenerateRouteRequest) error {
 	if req.SurfacePolicy != "" && req.SurfacePolicy != "strict" && req.SurfacePolicy != "assume_paved" {
 		return fmt.Errorf("%w: surfacePolicy must be strict or assume_paved", ErrInvalidRequest)
 	}
+	if req.PreferredDirection != "" && !validPreferredDirection(req.PreferredDirection) {
+		return fmt.Errorf("%w: preferredDirection must be empty or one of N, NE, E, SE, S, SW, W, NW", ErrInvalidRequest)
+	}
 	return nil
+}
+
+func validPreferredDirection(direction string) bool {
+	switch direction {
+	case "N", "NE", "E", "SE", "S", "SW", "W", "NW":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateImport(req ImportRouteRequest) error {

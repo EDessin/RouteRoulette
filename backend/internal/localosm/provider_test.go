@@ -3,6 +3,7 @@ package localosm
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"testing"
@@ -197,7 +198,7 @@ func TestWaypointPickSkipsUsedNodes(t *testing.T) {
 	}
 	used := map[int]struct{}{1: {}}
 
-	idx, err := set.pick(0, 500, used, rand.New(rand.NewSource(1)))
+	idx, err := set.pick(0, 500, used, rand.New(rand.NewSource(1)), directionPreference{})
 	if err != nil {
 		t.Fatalf("pick() returned error: %v", err)
 	}
@@ -228,7 +229,7 @@ func TestLocalScorePenalizesRoutesMoreThanHalfKilometerLong(t *testing.T) {
 		PavedPercent: 70,
 	}
 
-	if localScore(withinLimit, targetM, 70, false, false) >= localScore(overLimit, targetM, 70, false, false) {
+	if localScore(withinLimit, targetM, 70, false, false, "") >= localScore(overLimit, targetM, 70, false, false, "") {
 		t.Fatal("expected local scoring to penalize routes more than 0.5 km longer than requested")
 	}
 }
@@ -247,7 +248,7 @@ func TestLocalScorePenalizesPreviouslyRunRoadsWhenPreferred(t *testing.T) {
 		PreviouslyRunPercent: 50,
 	}
 
-	if localScore(unrunRoute, targetM, 90, true, false) >= localScore(previouslyRunRoute, targetM, 90, true, false) {
+	if localScore(unrunRoute, targetM, 90, true, false, "") >= localScore(previouslyRunRoute, targetM, 90, true, false, "") {
 		t.Fatal("expected local scoring to prefer unrun roads")
 	}
 }
@@ -264,7 +265,7 @@ func TestLocalScoreIgnoresPavedDifferenceWithoutMinimum(t *testing.T) {
 		PavedPercent: 0,
 	}
 
-	if localScore(pavedRoute, targetM, 0, false, false) != localScore(unpavedRoute, targetM, 0, false, false) {
+	if localScore(pavedRoute, targetM, 0, false, false, "") != localScore(unpavedRoute, targetM, 0, false, false, "") {
 		t.Fatal("expected paved percentage to be ignored when no minimum paved percentage is requested")
 	}
 }
@@ -283,7 +284,7 @@ func TestLocalScorePrefersUnpavedRoadsWhenRequested(t *testing.T) {
 		KnownUnpavedPercent: 50,
 	}
 
-	if localScore(unpavedRoute, targetM, 0, false, true) >= localScore(pavedRoute, targetM, 0, false, true) {
+	if localScore(unpavedRoute, targetM, 0, false, true, "") >= localScore(pavedRoute, targetM, 0, false, true, "") {
 		t.Fatal("expected local scoring to prefer routes with more unpaved road")
 	}
 }
@@ -304,7 +305,7 @@ func TestLocalScorePenalizesPavedOverageWhenUnpavedIsPreferred(t *testing.T) {
 		KnownUnpavedPercent: 50,
 	}
 
-	if localScore(withinPavedCap, targetM, 0, false, true) >= localScore(overPavedCap, targetM, 0, false, true) {
+	if localScore(withinPavedCap, targetM, 0, false, true, "") >= localScore(overPavedCap, targetM, 0, false, true, "") {
 		t.Fatal("expected local scoring to penalize paved roads above the unpaved preference cap")
 	}
 }
@@ -328,6 +329,76 @@ func TestSurfacePreferenceAllowsUnpavedFallbackWithoutRelaxingPavedCap(t *testin
 	}
 	if surfacePreferenceSatisfied(overPavedCap, req, 40) {
 		t.Fatal("expected fallback unpaved target to keep the paved-road cap")
+	}
+}
+
+func TestCompassDirectionBearingMapsCardinalAndOrdinalDirections(t *testing.T) {
+	tests := []struct {
+		direction string
+		wantDeg   float64
+	}{
+		{direction: "N", wantDeg: 0},
+		{direction: "NE", wantDeg: 45},
+		{direction: "E", wantDeg: 90},
+		{direction: "SE", wantDeg: 135},
+		{direction: "S", wantDeg: 180},
+		{direction: "SW", wantDeg: 225},
+		{direction: "W", wantDeg: 270},
+		{direction: "NW", wantDeg: 315},
+	}
+
+	for _, tt := range tests {
+		got, ok := compassDirectionBearing(tt.direction)
+		if !ok {
+			t.Fatalf("compassDirectionBearing(%q) was not recognized", tt.direction)
+		}
+		if math.Abs(radiansToDegrees(got)-tt.wantDeg) > 0.001 {
+			t.Fatalf("compassDirectionBearing(%q) = %.1f degrees, want %.1f", tt.direction, radiansToDegrees(got), tt.wantDeg)
+		}
+	}
+	if _, ok := compassDirectionBearing("ENE"); ok {
+		t.Fatal("expected invalid compass direction not to be recognized")
+	}
+}
+
+func TestDirectionPreferenceWidensDuringSearch(t *testing.T) {
+	req := planner.CandidateRequest{PreferredDirection: "E"}
+
+	first := directionPreferenceForAttempt(req, 0, 100)
+	middle := directionPreferenceForAttempt(req, 50, 100)
+	late := directionPreferenceForAttempt(req, 80, 100)
+
+	if !first.Active || math.Abs(radiansToDegrees(first.MaxDiffRad)-45) > 0.001 {
+		t.Fatalf("first direction max diff = %.1f, want 45", radiansToDegrees(first.MaxDiffRad))
+	}
+	if !middle.Active || math.Abs(radiansToDegrees(middle.MaxDiffRad)-70) > 0.001 {
+		t.Fatalf("middle direction max diff = %.1f, want 70", radiansToDegrees(middle.MaxDiffRad))
+	}
+	if !late.Active || math.Abs(late.MaxDiffRad-math.Pi) > 0.001 {
+		t.Fatalf("late direction max diff = %.1f radians, want pi", late.MaxDiffRad)
+	}
+	if directionPreferenceForAttempt(planner.CandidateRequest{}, 0, 100).Active {
+		t.Fatal("expected no direction preference when no preferred direction is set")
+	}
+}
+
+func TestLocalScorePrefersRequestedDirection(t *testing.T) {
+	targetM := 2000.0
+	east, _ := compassDirectionBearing("E")
+	west, _ := compassDirectionBearing("W")
+	eastRoute := localCandidate{
+		DistanceM:           targetM,
+		DirectionBearing:    east,
+		HasDirectionBearing: true,
+	}
+	westRoute := localCandidate{
+		DistanceM:           targetM,
+		DirectionBearing:    west,
+		HasDirectionBearing: true,
+	}
+
+	if localScore(eastRoute, targetM, 0, false, false, "E") >= localScore(westRoute, targetM, 0, false, false, "E") {
+		t.Fatal("expected local scoring to prefer a route in the requested direction")
 	}
 }
 
@@ -439,7 +510,7 @@ func TestSurfaceMarksAffectPavedPercentages(t *testing.T) {
 	graph.applySurfaceMarks(surfaceOverlay{RoadsByWayID: map[int64]surfacemarks.Road{
 		42: {OSMWayID: 42, Surface: surfacemarks.SurfacePaved},
 	}})
-	pavedCandidate, err := buildLocalCandidate(path, []GraphEdge{graph.Edges[0][0], graph.Edges[1][1]}, 100, SurfacePolicyAssumePaved, nil, emptyHistoryOverlay(), emptyAvoidanceOverlay())
+	pavedCandidate, err := graph.buildLocalCandidate(0, path, []GraphEdge{graph.Edges[0][0], graph.Edges[1][1]}, 100, SurfacePolicyAssumePaved, nil, emptyHistoryOverlay(), emptyAvoidanceOverlay())
 	if err != nil {
 		t.Fatalf("buildLocalCandidate() with paved mark returned error: %v", err)
 	}
@@ -452,7 +523,7 @@ func TestSurfaceMarksAffectPavedPercentages(t *testing.T) {
 	graph.applySurfaceMarks(surfaceOverlay{RoadsByWayID: map[int64]surfacemarks.Road{
 		42: {OSMWayID: 42, Surface: surfacemarks.SurfaceUnpaved},
 	}})
-	unpavedCandidate, err := buildLocalCandidate(path, []GraphEdge{graph.Edges[0][0], graph.Edges[1][1]}, 100, SurfacePolicyAssumePaved, nil, emptyHistoryOverlay(), emptyAvoidanceOverlay())
+	unpavedCandidate, err := graph.buildLocalCandidate(0, path, []GraphEdge{graph.Edges[0][0], graph.Edges[1][1]}, 100, SurfacePolicyAssumePaved, nil, emptyHistoryOverlay(), emptyAvoidanceOverlay())
 	if err != nil {
 		t.Fatalf("buildLocalCandidate() with unpaved mark returned error: %v", err)
 	}
@@ -508,7 +579,7 @@ func TestCycleCandidateBuildsDisjointCycle(t *testing.T) {
 		Degree:  graph.usableDegree(1, true, SurfacePolicyStrict),
 	}
 
-	candidate, err := graph.cycleCandidate(0, 3900, 70, false, true, SurfacePolicyStrict, rand.New(rand.NewSource(1)), waypointSet{Nodes: []waypointNode{anchor}}, emptyHistoryOverlay(), emptyAvoidanceOverlay(), graph.newSearchWorkspace())
+	candidate, err := graph.cycleCandidate(0, 3900, 70, false, true, SurfacePolicyStrict, rand.New(rand.NewSource(1)), waypointSet{Nodes: []waypointNode{anchor}}, emptyHistoryOverlay(), emptyAvoidanceOverlay(), graph.newSearchWorkspace(), directionPreference{})
 	if err != nil {
 		t.Fatalf("cycleCandidate() returned error: %v", err)
 	}
@@ -545,7 +616,7 @@ func TestBlockLoopCandidateBuildsCompactDisjointCycle(t *testing.T) {
 		Degree:  graph.usableDegree(1, false, SurfacePolicyStrict),
 	}
 
-	candidate, err := graph.blockLoopCandidate(0, 3900, 0, false, false, SurfacePolicyStrict, rand.New(rand.NewSource(1)), waypointSet{Nodes: []waypointNode{anchor}}, emptyHistoryOverlay(), emptyAvoidanceOverlay(), graph.newSearchWorkspace())
+	candidate, err := graph.blockLoopCandidate(0, 3900, 0, false, false, SurfacePolicyStrict, rand.New(rand.NewSource(1)), waypointSet{Nodes: []waypointNode{anchor}}, emptyHistoryOverlay(), emptyAvoidanceOverlay(), graph.newSearchWorkspace(), directionPreference{})
 	if err != nil {
 		t.Fatalf("blockLoopCandidate() returned error: %v", err)
 	}
@@ -573,7 +644,7 @@ func TestLoopCandidateBuildsShortRouteWhenPavingAndHistoryAreDisabled(t *testing
 	addTestEdge(&graph, 3, 0, SurfacePaved)
 
 	waypoints := graph.newWaypointSet(0, 1000, false, SurfacePolicyStrict)
-	candidate, err := graph.loopCandidate(0, 1000, 0, false, false, SurfacePolicyStrict, rand.New(rand.NewSource(4)), waypoints, emptyHistoryOverlay(), emptyAvoidanceOverlay(), graph.newSearchWorkspace())
+	candidate, err := graph.loopCandidate(0, 1000, 0, false, false, SurfacePolicyStrict, rand.New(rand.NewSource(4)), waypoints, emptyHistoryOverlay(), emptyAvoidanceOverlay(), graph.newSearchWorkspace(), directionPreference{})
 	if err != nil {
 		t.Fatalf("loopCandidate() returned error: %v", err)
 	}

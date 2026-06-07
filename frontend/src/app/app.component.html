@@ -156,6 +156,24 @@
         />
       </label>
 
+      <div class="field compass-field">
+        <span>Route direction</span>
+        <div class="compass-rose" role="radiogroup" aria-label="Route direction">
+          @for (option of directionOptions; track option.label) {
+            <button
+              type="button"
+              class="compass-button"
+              [class.compass-button-selected]="preferredDirection === option.value"
+              role="radio"
+              [attr.aria-checked]="preferredDirection === option.value"
+              (click)="preferredDirection = option.value"
+            >
+              {{ option.label }}
+            </button>
+          }
+        </div>
+      </div>
+
       <label class="check-row">
         <p-checkbox
           [ngModel]="preferPaved"
@@ -230,6 +248,10 @@
         <div>
           <span>Duration</span>
           <strong>{{ route.durationMinutes }} min</strong>
+        </div>
+        <div>
+          <span>Direction</span>
+          <strong>{{ preferredDirection || 'Any' }}</strong>
         </div>
         @if (route.pavedPercent !== undefined) {
           <div>

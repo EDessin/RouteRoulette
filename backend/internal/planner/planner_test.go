@@ -236,6 +236,24 @@ func TestValidateAllowsAssumePavedSurfacePolicy(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsUnknownPreferredDirection(t *testing.T) {
+	req := testGenerateRouteRequest()
+	req.PreferredDirection = "ENE"
+
+	if err := validate(req); err == nil {
+		t.Fatal("expected unknown preferred direction to be rejected")
+	}
+}
+
+func TestValidateAllowsPreferredDirection(t *testing.T) {
+	req := testGenerateRouteRequest()
+	req.PreferredDirection = "NW"
+
+	if err := validate(req); err != nil {
+		t.Fatalf("validate() returned error: %v", err)
+	}
+}
+
 func TestValidateRejectsConflictingSurfacePreferences(t *testing.T) {
 	req := testGenerateRouteRequest()
 	req.MinPavedPercent = 80

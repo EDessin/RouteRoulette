@@ -180,6 +180,40 @@ p {
   flex: 1 1 0;
 }
 
+.compass-field {
+  gap: 0.55rem;
+}
+
+.compass-rose {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.4rem;
+  width: min(100%, 13rem);
+}
+
+.compass-button {
+  display: grid;
+  place-items: center;
+  min-height: 2.35rem;
+  border: 1px solid #cfdad3;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #26332c;
+  font: inherit;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.compass-button:hover {
+  border-color: #16a34a;
+}
+
+.compass-button-selected {
+  border-color: #114f3b;
+  background: #114f3b;
+  color: #ffffff;
+}
+
 .summary-wide {
   grid-column: 1 / -1;
 }

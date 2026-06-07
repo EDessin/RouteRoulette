@@ -31,6 +31,7 @@ type GenerateRouteRequest struct {
 	MinPavedPercent       float64    `json:"minPavedPercent"`
 	SurfacePolicy         string     `json:"surfacePolicy,omitempty"`
 	PreferUnrunRoads      bool       `json:"preferUnrunRoads"`
+	PreferredDirection    string     `json:"preferredDirection,omitempty"`
 	Seed                  *int64     `json:"seed,omitempty"`
 }
 
@@ -65,15 +66,16 @@ type GeoJSONLine struct {
 }
 
 type CandidateRequest struct {
-	Start            Coordinate
-	Home             Coordinate
-	TargetDistanceM  float64
-	PreferPaved      bool
-	PreferUnpaved    bool
-	MinPavedPercent  float64
-	SurfacePolicy    string
-	PreferUnrunRoads bool
-	Seed             int64
+	Start              Coordinate
+	Home               Coordinate
+	TargetDistanceM    float64
+	PreferPaved        bool
+	PreferUnpaved      bool
+	MinPavedPercent    float64
+	SurfacePolicy      string
+	PreferUnrunRoads   bool
+	PreferredDirection string
+	Seed               int64
 }
 
 type CandidateRoute struct {

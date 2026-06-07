@@ -19,6 +19,7 @@ import {
   MarkedRoad,
   MarkedRoadSurface,
   RouteApiService,
+  RouteDirection,
   RouteResponse,
   RouteSegment,
 } from './route-api.service';
@@ -52,6 +53,7 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
   preferPaved = true;
   preferUnpaved = false;
   preferUnrunRoads = true;
+  preferredDirection: RouteDirection = '';
 
   route?: RouteResponse;
   historyStatus?: HistoryStatus;
@@ -82,6 +84,17 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
   surfaceMarkOptions = [
     { label: 'Paved', value: 'paved' },
     { label: 'Unpaved', value: 'unpaved' },
+  ];
+  directionOptions: { label: string; value: RouteDirection }[] = [
+    { label: 'NW', value: 'NW' },
+    { label: 'N', value: 'N' },
+    { label: 'NE', value: 'NE' },
+    { label: 'W', value: 'W' },
+    { label: 'Any', value: '' },
+    { label: 'E', value: 'E' },
+    { label: 'SW', value: 'SW' },
+    { label: 'S', value: 'S' },
+    { label: 'SE', value: 'SE' },
   ];
 
   private homeLat = 50.9950381;
@@ -377,6 +390,7 @@ export class AppComponent implements AfterViewInit, OnDestroy, OnInit {
         minPavedPercent,
         surfacePolicy: 'assume_paved',
         preferUnrunRoads: this.preferUnrunRoads,
+        preferredDirection: this.preferredDirection || undefined,
         seed: Date.now(),
       })
       .subscribe({
